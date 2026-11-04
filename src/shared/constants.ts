@@ -10,3 +10,37 @@ export const PLAYER_COLORS = [
 	"#22c55e",
 	"#eab308",
 ] as const;
+
+// ============================================================================
+// SPEC.md & F0-contrato.md CONSTANTS
+// ============================================================================
+
+export { CODE_ALPHABET, CONFUSABLE_CHARS } from "@/shared/codeGen.ts";
+export { LOCKED_STRINGS } from "@/shared/i18n/lockedStrings.ts";
+export { BADGE_PRIORITY_ORDER } from "@/shared/scoring.ts";
+
+export const AVATAR_SPECIES = [
+	"Zorro",
+	"Búho",
+	"Rana",
+	"Gato",
+	"Llama",
+	"Tucán",
+	"Ratón",
+	"Tortuga",
+] as const;
+
+export const STATIONS = [
+	"campamento",
+	"chacra",
+	"taller",
+	"alcaldía",
+	"puente",
+] as const;
+
+export const DEMO_CONFIG = {
+	expectedPlayers: 4,
+	durationMinutes: 5,
+	durationGameMs: 300000,
+	language: "ES" as const,
+};
