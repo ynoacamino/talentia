@@ -4,18 +4,23 @@
  */
 import { create } from "zustand";
 import { codeGen } from "@/shared/codeGen.ts";
+import type {
+	CriterionScore,
+	Language,
+	StarRating,
+} from "@/shared/documents.ts";
 import { starsFor } from "@/shared/scoring.ts";
 import type { GroupScores } from "@/ui/tokens/badges.ts";
 
-export type SessionLanguage = "ES" | "EN" | "QUZ";
+export type SessionLanguage = Language;
 
 export interface StudentEvaluation {
 	studentId: string;
 	studentName: string;
 	avatarId: string;
-	participacion: number; // 0..2
-	propuesta: number; // 0..2
-	organizacion: number; // 0..2
+	participacion: CriterionScore; // 0..2
+	propuesta: CriterionScore; // 0..2
+	organizacion: CriterionScore; // 0..2
 	anecdote: string;
 	voiceTurns: number;
 	drawsCount: number;
@@ -37,7 +42,7 @@ export interface PastSessionRecord {
 	date: string;
 	language: SessionLanguage;
 	players: number;
-	stars: number | null; // null si quedó inconclusa
+	stars: StarRating | null; // null si quedó inconclusa
 	status: "completada" | "inconclusa";
 	commentsCount: number;
 }
