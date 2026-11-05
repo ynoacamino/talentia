@@ -31,6 +31,10 @@ import {
 	NewSessionForm,
 	type NewSessionFormProps,
 } from "@/ui/teacher/NewSessionForm.tsx";
+import {
+	OperatorConsole,
+	type OperatorConsoleProps,
+} from "@/ui/teacher/OperatorConsole.tsx";
 import { useTeacherStore } from "@/ui/teacher/teacherStore.ts";
 import { KID_AVATARS } from "@/ui/tokens/avatars.ts";
 import { SAFE_CODE_ALPHABET } from "@/ui/tokens/strings.ts";
@@ -548,10 +552,8 @@ describe("F3a Integration: Surface D1, Session Controls, Join and Player Claim (
 
 		it("muestra el botón 'Iniciar con X listos' si hay ≥2 confirmados y < N", () => {
 			const html = renderToString(
-				React.createElement<LiveMirrorProps>(LiveMirror, {
+				React.createElement<OperatorConsoleProps>(OperatorConsole, {
 					repo,
-					studentEvals: useTeacherStore.getState().studentEvals,
-					activeSessionCode: "FRCE",
 				}),
 			);
 
@@ -568,10 +570,8 @@ describe("F3a Integration: Surface D1, Session Controls, Join and Player Claim (
 			}));
 
 			const html = renderToString(
-				React.createElement<LiveMirrorProps>(LiveMirror, {
+				React.createElement<OperatorConsoleProps>(OperatorConsole, {
 					repo,
-					studentEvals: useTeacherStore.getState().studentEvals,
-					activeSessionCode: "FRCE",
 				}),
 			);
 			expect(html).not.toContain('data-testid="force-start-btn"');
@@ -686,10 +686,8 @@ describe("F3a Integration: Surface D1, Session Controls, Join and Player Claim (
 
 		it("renderiza botón de retirar y diálogo de confirmación inline en /teacher", () => {
 			const html = renderToString(
-				React.createElement<LiveMirrorProps>(LiveMirror, {
+				React.createElement<OperatorConsoleProps>(OperatorConsole, {
 					repo,
-					studentEvals: useTeacherStore.getState().studentEvals,
-					activeSessionCode: "DROP",
 				}),
 			);
 

@@ -20,16 +20,29 @@ import type {
 	StarRating,
 } from "@/shared/documents.ts";
 import { starsFor } from "@/shared/scoring.ts";
+import {
+	STATIONS,
+	type StationId,
+	type SubtitleLine,
+} from "@/ui/play/playStore.ts";
 import { KID_AVATARS } from "@/ui/tokens/avatars.ts";
 import type { GroupScores } from "@/ui/tokens/badges.ts";
 
 export type SessionLanguage = Language;
+
+export type ParticipantCardStatus =
+	| "claimed"
+	| "confirmed"
+	| "speaking"
+	| "drawing"
+	| "retired";
 
 export interface StudentEvaluation {
 	studentId: string;
 	studentName: string;
 	avatarId: string;
 	confirmed?: boolean;
+	status?: ParticipantCardStatus;
 	participacion: CriterionScore; // 0..2
 	propuesta: CriterionScore; // 0..2
 	organizacion: CriterionScore; // 0..2
@@ -38,6 +51,47 @@ export interface StudentEvaluation {
 	drawsCount: number;
 	retired: boolean;
 	retiredAt?: string;
+}
+
+export type ClosedEventType =
+	| "press"
+	| "blocked_press"
+	| "speech_start"
+	| "speech_end"
+	| "transcript"
+	| "suspected_overlap"
+	| "draw_start"
+	| "draw_submit"
+	| "vision_read"
+	| "move_propose"
+	| "move_veto"
+	| "move_execute"
+	| "refusal"
+	| "hint_level"
+	| "grant_step"
+	| "npc_line"
+	| "time_skip"
+	| "judge_scores";
+
+export interface MirrorTranscript {
+	id: string;
+	holder: string;
+	text: string;
+	time: string;
+	avatarId: string;
+	game_ts_ms: number;
+	wall_ts_ms: number;
+}
+
+export interface MirrorEvent {
+	id: string;
+	type: ClosedEventType;
+	actor: string;
+	details: string;
+	time: string;
+	game_ts_ms: number;
+	wall_ts_ms: number;
+	payload?: Record<string, string | number | boolean | null | undefined>;
 }
 
 export interface TeacherComment {
@@ -83,23 +137,22 @@ export interface TeacherState {
 	liveStep: number;
 	liveStation: string;
 	liveTimerSeconds: number;
+	isTimerPaused: boolean;
+	pauseReason: string | null;
 	stallCountdownSeconds: number;
+	stallTier: "L1" | "L2" | "L3";
 	wallClockMs: number;
 	teacherAssisted: boolean; // Flag "con apoyo docente"
-	recentTranscripts: Array<{
-		id: string;
-		holder: string;
-		text: string;
-		time: string;
-		avatarId: string;
-	}>;
-	recentEvents: Array<{
-		id: string;
-		type: string;
-		actor: string;
-		details: string;
-		time: string;
-	}>;
+	conApoyoDocente: boolean; // Alias / indicador explícito
+	consoleError: string | null;
+	inventory: {
+		madera: boolean;
+		plano: boolean;
+		sello: boolean;
+	};
+	activeSubtitles: SubtitleLine[];
+	recentTranscripts: MirrorTranscript[];
+	recentEvents: MirrorEvent[];
 
 	// Panel Docente ([TEACH-03], §11)
 	groupScores: GroupScores;
@@ -132,11 +185,39 @@ export interface TeacherState {
 	setActiveTab: (tab: TeacherState["activeTab"]) => void;
 	toggleBgmMute: () => void;
 
+	// Acciones de Espejo en Vivo y Temporizadores
+	setTimerPaused: (paused: boolean, reason?: string | null) => void;
+	setStallCountdown: (seconds: number, tier?: "L1" | "L2" | "L3") => void;
+	setLiveTimerSeconds: (seconds: number) => void;
+	setParticipantStatus: (
+		studentId: string,
+		status: ParticipantCardStatus,
+	) => void;
+	setInventory: (
+		inv: Partial<{ madera: boolean; plano: boolean; sello: boolean }>,
+	) => void;
+	addSubtitle: (
+		sub: Omit<SubtitleLine, "id" | "expiresAt"> & { expiresAt?: number },
+	) => void;
+	clearExpiredSubtitles: () => void;
+	addTranscript: (
+		transcript: Omit<MirrorTranscript, "id"> & { id?: string },
+	) => void;
+	addEvent: (event: Omit<MirrorEvent, "id"> & { id?: string }) => void;
+
 	// Acciones de Consola Silenciosa (§13)
 	skipToStation: (stationName: string) => void;
-	forceGrantNext: () => void;
+	forceGrantNext: () => {
+		ok: boolean;
+		error?: string;
+		step?: number;
+		item?: string;
+	};
+	forceGrantStep: (
+		target: "madera" | "diseño" | "diseno" | "permiso" | 1 | 2 | 3,
+	) => { ok: boolean; error?: string; step?: number; item?: string };
 	replayLastNpcLine: () => void;
-	endRunNow: () => void;
+	endRunNow: (repo?: ISessionRepository | ISyncSessionRepository) => void;
 	skipIntro: () => void;
 	retireStudent: (
 		studentId: string,
@@ -187,6 +268,8 @@ const INITIAL_STUDENT_EVALS: StudentEvaluation[] = [
 		studentId: "c1",
 		studentName: "Mateo",
 		avatarId: "zorro",
+		confirmed: true,
+		status: "confirmed",
 		participacion: 2,
 		propuesta: 2,
 		organizacion: 1,
@@ -200,6 +283,8 @@ const INITIAL_STUDENT_EVALS: StudentEvaluation[] = [
 		studentId: "c2",
 		studentName: "Valentina",
 		avatarId: "buho",
+		confirmed: true,
+		status: "confirmed",
 		participacion: 2,
 		propuesta: 1,
 		organizacion: 2,
@@ -213,6 +298,8 @@ const INITIAL_STUDENT_EVALS: StudentEvaluation[] = [
 		studentId: "c3",
 		studentName: "Leo",
 		avatarId: "rana",
+		confirmed: false,
+		status: "claimed",
 		participacion: 1,
 		propuesta: 2,
 		organizacion: 1,
@@ -226,6 +313,8 @@ const INITIAL_STUDENT_EVALS: StudentEvaluation[] = [
 		studentId: "c4",
 		studentName: "Sofía",
 		avatarId: "gato",
+		confirmed: false,
+		status: "claimed",
 		participacion: 2,
 		propuesta: 1,
 		organizacion: 2,
@@ -237,13 +326,15 @@ const INITIAL_STUDENT_EVALS: StudentEvaluation[] = [
 	},
 ];
 
-const INITIAL_TRANSCRIPTS = [
+const INITIAL_TRANSCRIPTS: MirrorTranscript[] = [
 	{
 		id: "t1",
 		holder: "Mateo (Zorro)",
 		text: "Paco, necesitamos madera para reparar el puente roto.",
 		time: "00:45",
 		avatarId: "zorro",
+		game_ts_ms: 45000,
+		wall_ts_ms: 1730715345000,
 	},
 	{
 		id: "t2",
@@ -251,6 +342,8 @@ const INITIAL_TRANSCRIPTS = [
 		text: "Claro, pero ¿quién ayuda y en qué en mis surcos?",
 		time: "00:52",
 		avatarId: "paco",
+		game_ts_ms: 52000,
+		wall_ts_ms: 1730715352000,
 	},
 	{
 		id: "t3",
@@ -258,6 +351,8 @@ const INITIAL_TRANSCRIPTS = [
 		text: "Nosotros ayudamos a regar todos los surcos con baldes.",
 		time: "01:10",
 		avatarId: "rana",
+		game_ts_ms: 70000,
+		wall_ts_ms: 1730715370000,
 	},
 	{
 		id: "t4",
@@ -265,16 +360,20 @@ const INITIAL_TRANSCRIPTS = [
 		text: "¡Trato hecho! Ahora vamos al taller de la Ingeniera Luz.",
 		time: "01:25",
 		avatarId: "buho",
+		game_ts_ms: 85000,
+		wall_ts_ms: 1730715385000,
 	},
 ];
 
-const INITIAL_EVENTS = [
+const INITIAL_EVENTS: MirrorEvent[] = [
 	{
 		id: "e1",
 		type: "press",
 		actor: "Mateo",
 		details: "Hold talk button (2.8s)",
 		time: "00:43",
+		game_ts_ms: 43000,
+		wall_ts_ms: 1730715343000,
 	},
 	{
 		id: "e2",
@@ -282,6 +381,8 @@ const INITIAL_EVENTS = [
 		actor: "Agricultor Paco",
 		details: "Item madera concedido (F2)",
 		time: "01:15",
+		game_ts_ms: 75000,
+		wall_ts_ms: 1730715375000,
 	},
 	{
 		id: "e3",
@@ -289,6 +390,8 @@ const INITIAL_EVENTS = [
 		actor: "Valentina",
 		details: "Propuesta hacia Taller",
 		time: "01:28",
+		game_ts_ms: 88000,
+		wall_ts_ms: 1730715388000,
 	},
 	{
 		id: "e4",
@@ -296,6 +399,19 @@ const INITIAL_EVENTS = [
 		actor: "Equipo",
 		details: "Marcha hacia Taller completada",
 		time: "01:36",
+		game_ts_ms: 96000,
+		wall_ts_ms: 1730715396000,
+	},
+];
+
+const INITIAL_SUBTITLES: SubtitleLine[] = [
+	{
+		id: "sub-1",
+		speakerName: "Alcalde Soto",
+		speakerColor: "#ffffff",
+		speakerType: "npc",
+		text: "¡El río nos partió el puente! Debemos unirnos para cruzarlo.",
+		expiresAt: Date.now() + 6000,
 	},
 ];
 
@@ -319,9 +435,20 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 	liveStep: 2,
 	liveStation: "taller",
 	liveTimerSeconds: 215, // 03:35 restante
+	isTimerPaused: false,
+	pauseReason: null,
 	stallCountdownSeconds: 45, // L1 nudge en 45s
+	stallTier: "L1",
 	wallClockMs: Date.now(),
 	teacherAssisted: false,
+	conApoyoDocente: false,
+	consoleError: null,
+	inventory: {
+		madera: true,
+		plano: true,
+		sello: false,
+	},
+	activeSubtitles: INITIAL_SUBTITLES,
 
 	recentTranscripts: INITIAL_TRANSCRIPTS,
 	recentEvents: INITIAL_EVENTS,
@@ -668,81 +795,404 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 
 	toggleBgmMute: () => set((state) => ({ isBgmMuted: !state.isBgmMuted })),
 
+	setTimerPaused: (paused, reason = null) =>
+		set({ isTimerPaused: paused, pauseReason: reason }),
+
+	setStallCountdown: (seconds, tier) =>
+		set((state) => ({
+			stallCountdownSeconds: seconds,
+			stallTier: tier ?? state.stallTier,
+		})),
+
+	setLiveTimerSeconds: (seconds) => set({ liveTimerSeconds: seconds }),
+
+	setParticipantStatus: (studentId, status) =>
+		set((state) => ({
+			studentEvals: state.studentEvals.map((s) =>
+				s.studentId === studentId
+					? {
+							...s,
+							status,
+							confirmed: status === "confirmed" ? true : s.confirmed,
+							retired: status === "retired" ? true : s.retired,
+						}
+					: s,
+			),
+		})),
+
+	setInventory: (inv) =>
+		set((state) => ({
+			inventory: { ...state.inventory, ...inv },
+		})),
+
+	addSubtitle: (sub) => {
+		const id = `sub-${Date.now()}-${Math.random()}`;
+		const expiresAt = sub.expiresAt ?? Date.now() + 6000;
+		const newLine: SubtitleLine = {
+			id,
+			speakerName: sub.speakerName,
+			speakerColor: sub.speakerColor,
+			speakerType: sub.speakerType,
+			text: sub.text,
+			expiresAt,
+		};
+		set((state) => ({
+			activeSubtitles: [...state.activeSubtitles.slice(-1), newLine],
+		}));
+	},
+
+	clearExpiredSubtitles: () => {
+		const now = Date.now();
+		const valid = get().activeSubtitles.filter((s) => s.expiresAt > now);
+		if (valid.length !== get().activeSubtitles.length) {
+			set({ activeSubtitles: valid });
+		}
+	},
+
+	addTranscript: (t) => {
+		const id = t.id ?? `tr-${Date.now()}`;
+		const newT: MirrorTranscript = {
+			id,
+			holder: t.holder,
+			text: t.text,
+			time: t.time ?? "00:00",
+			avatarId: t.avatarId,
+			game_ts_ms: t.game_ts_ms,
+			wall_ts_ms: t.wall_ts_ms,
+		};
+		set((state) => ({
+			recentTranscripts: [...state.recentTranscripts, newT].slice(-20),
+		}));
+	},
+
+	addEvent: (ev) => {
+		const id = ev.id ?? `ev-${Date.now()}`;
+		const newEv: MirrorEvent = {
+			id,
+			type: ev.type,
+			actor: ev.actor,
+			details: ev.details,
+			time: ev.time ?? "00:00",
+			game_ts_ms: ev.game_ts_ms,
+			wall_ts_ms: ev.wall_ts_ms,
+		};
+		set((state) => ({
+			recentEvents: [newEv, ...state.recentEvents].slice(0, 20),
+		}));
+	},
+
 	skipToStation: (stationName) => {
-		const newEvent = {
+		const state = get();
+		const rawName = stationName.trim();
+		const rawLower = rawName.toLowerCase();
+		let targetId: StationId = "campamento";
+		if (rawLower.includes("chacra")) targetId = "chacra";
+		else if (rawLower.includes("taller")) targetId = "taller";
+		else if (rawLower.includes("alcaldia") || rawLower.includes("alcaldía"))
+			targetId = "alcaldia";
+		else if (rawLower.includes("puente")) targetId = "puente";
+		else if (rawLower in STATIONS) targetId = rawLower as StationId;
+
+		const fromStation = (state.liveStation || "campamento") as StationId;
+		const toStation = targetId;
+
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const newEvent: MirrorEvent = {
 			id: `ev-${Date.now()}`,
 			type: "time_skip",
 			actor: "Operador",
-			details: `Salto a estación ${stationName} (teletransporte fade)`,
-			time: "00:00",
+			details: `Salto a estación ${toStation} (teletransporte fade)`,
+			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
+			payload: {
+				fromStation,
+				toStation,
+				triggeredBy: "teacher_console",
+			},
 		};
-		set((state) => ({
-			liveStation: stationName.toLowerCase(),
-			recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
+
+		// Emitir salto de estación en tiempo real a /play
+		state.syncBus?.send({
+			type: "TIME_SKIP",
+			fromStation,
+			toStation,
+		});
+
+		// REGLA ESTRICTA: NO otorga ningún grant/item ni aprobación
+		set((s) => ({
+			liveStation: toStation,
+			recentEvents: [newEvent, ...s.recentEvents].slice(0, 20),
 		}));
+	},
+
+	forceGrantStep: (targetStep) => {
+		const state = get();
+		const inventory = state.inventory ?? {
+			madera: state.liveStep >= 1,
+			plano: state.liveStep >= 2,
+			sello: state.liveStep >= 3,
+		};
+
+		let targetNum: 1 | 2 | 3;
+		if (targetStep === 1 || targetStep === "madera") {
+			targetNum = 1;
+		} else if (
+			targetStep === 2 ||
+			targetStep === "diseño" ||
+			targetStep === "diseno"
+		) {
+			targetNum = 2;
+		} else if (targetStep === 3 || targetStep === "permiso") {
+			targetNum = 3;
+		} else {
+			return { ok: false, error: "Paso desconocido" };
+		}
+
+		// Verificación de orden secuencial estricto (§9, §11, §13):
+		// 1. 'madera' si no tiene madera
+		// 2. 'diseño' si ya tiene madera pero no diseño
+		// 3. 'permiso' si ya tiene madera y diseño pero no permiso
+		const hasMadera = inventory.madera || state.liveStep >= 1;
+		const hasDiseno =
+			(inventory.madera && inventory.plano) || state.liveStep >= 2;
+
+		if (targetNum === 2) {
+			if (!hasMadera) {
+				const errMsg = "Falta: madera";
+				set({ consoleError: errMsg });
+				return { ok: false, error: errMsg };
+			}
+		} else if (targetNum === 3) {
+			if (!hasMadera) {
+				const errMsg = "Falta: madera";
+				set({ consoleError: errMsg });
+				return { ok: false, error: errMsg };
+			}
+			if (!hasDiseno) {
+				const errMsg = "Falta: diseño";
+				set({ consoleError: errMsg });
+				return { ok: false, error: errMsg };
+			}
+		}
+
+		const itemKey =
+			targetNum === 1 ? "madera" : targetNum === 2 ? "plano" : "sello";
+		const stepId =
+			targetNum === 1
+				? "conseguir_madera"
+				: targetNum === 2
+					? "aprobar_diseno"
+					: "permiso_alcaldia";
+		const updatedInventory = {
+			...inventory,
+			madera: targetNum >= 1 || inventory.madera,
+			plano: targetNum >= 2 || inventory.plano,
+			sello: targetNum >= 3 || inventory.sello,
+			[itemKey]: true,
+		};
+
+		const nextStep = Math.max(state.liveStep, targetNum);
+
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const newEvent: MirrorEvent = {
+			id: `ev-${Date.now()}`,
+			type: "grant_step",
+			actor: "Operador (Forced)",
+			details: `Paso ${targetNum} (${itemKey}) otorgado con auxilio docente`,
+			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
+			payload: {
+				stepId,
+				grantedItem: itemKey,
+				forced: true,
+			},
+		};
+
+		// Broadcast a /play vía sessionSync
+		state.syncBus?.send({
+			type: "FORCE_GRANT",
+			step: nextStep,
+			item: itemKey,
+			teacherAssisted: true,
+		});
+
+		set((s) => ({
+			liveStep: nextStep,
+			inventory: updatedInventory,
+			teacherAssisted: true,
+			conApoyoDocente: true,
+			consoleError: null,
+			groupScores: {
+				...s.groupScores,
+				estructurada: Math.min(1, s.groupScores.estructurada), // Capado a máx 1 (§11)
+			},
+			recentEvents: [newEvent, ...s.recentEvents].slice(0, 20),
+		}));
+
+		return { ok: true, step: nextStep, item: itemKey };
 	},
 
 	forceGrantNext: () => {
-		// Concede el siguiente paso pendiente y capa estructurada a 1 (§11, §13)
-		set((state) => {
-			const nextStep = Math.min(3, state.liveStep + 1);
-			const newEvent = {
-				id: `ev-${Date.now()}`,
-				type: "grant_step",
-				actor: "Operador (Forced)",
-				details: `Paso ${nextStep} otorgado con auxilio docente`,
-				time: "00:00",
-			};
-			return {
-				liveStep: nextStep,
-				teacherAssisted: true,
-				groupScores: {
-					...state.groupScores,
-					estructurada: Math.min(1, state.groupScores.estructurada), // Capado a máx 1 (§11)
-				},
-				recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
-			};
-		});
+		const state = get();
+		const inventory = state.inventory ?? {
+			madera: state.liveStep >= 1,
+			plano: state.liveStep >= 2,
+			sello: state.liveStep >= 3,
+		};
+
+		const step = state.liveStep;
+		if (step < 1 || !inventory.madera) {
+			return get().forceGrantStep(1);
+		}
+		if (step < 2 || !inventory.plano) {
+			return get().forceGrantStep(2);
+		}
+		if (step < 3 || !inventory.sello) {
+			return get().forceGrantStep(3);
+		}
+		return { ok: false, error: "Todos los pasos ya fueron concedidos" };
 	},
 
 	replayLastNpcLine: () => {
-		const newEvent = {
+		const state = get();
+		const currentStation = (state.liveStation || "campamento") as StationId;
+		const st = STATIONS[currentStation] ?? STATIONS.campamento;
+		const defaultLines: Record<string, string> = {
+			campamento: "El río nos partió el puente. Debemos cruzar al otro lado.",
+			chacra:
+				"¡Bienvenidos a la chacra! Ayúdenme con los surcos si quieren madera.",
+			taller: "¡Hola equipo! Diseñemos un puente firme para cruzar.",
+			alcaldia:
+				"En la alcaldía necesitamos orden: ¿tienen la madera y el diseño?",
+			puente: "¡El puente está roto! Debemos repararlo.",
+		};
+		const line = defaultLines[currentStation] ?? "¡Continuemos con la misión!";
+
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const newEvent: MirrorEvent = {
 			id: `ev-${Date.now()}`,
 			type: "npc_line",
-			actor: "Operador (Replay)",
-			details: "Reemisión de última frase de PNJ",
-			time: "00:00",
+			actor: `Operador (Replay ${st.npcName})`,
+			details: `Replay NPC: "${line}"`,
+			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
+			payload: {
+				npcId: st.npcId,
+				stationId: currentStation,
+				text: line,
+				audioDurationMs: 0,
+			},
 		};
-		set((state) => ({
-			recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
+
+		// Emitir por sessionSync
+		state.syncBus?.send({
+			type: "REPLAY_NPC",
+			stationId: currentStation,
+			npcName: st.npcName,
+			text: line,
+		});
+
+		// REGLA ESTRICTA: NO crea ningún turno nuevo de transcripción ni avanza el juego
+		set((s) => ({
+			recentEvents: [newEvent, ...s.recentEvents].slice(0, 20),
 		}));
 	},
 
-	endRunNow: () => {
-		const newEvent = {
+	endRunNow: (repo) => {
+		const state = get();
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const newEvent: MirrorEvent = {
 			id: `ev-${Date.now()}`,
 			type: "judge_scores",
 			actor: "Operador",
 			details: "Terminar ahora ejecutado. Evaluación parcial del juez.",
-			time: "00:00",
+			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
 		};
-		set((state) => ({
-			liveTimerSeconds: 0,
+
+		// Detener partida de inmediato y congelar en /play
+		state.syncBus?.send({
+			type: "SESSION_END",
+			status: "expired",
+			endType: "partial",
+			scores: state.groupScores,
+		});
+
+		set({
+			liveTimerSeconds: state.liveTimerSeconds, // Congela el temporizador
+			isTimerPaused: true,
 			recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
 			activeTab: "docente",
-		}));
+		});
+
+		const targetRepo =
+			repo ??
+			(state.activeSessionCode ? getDefaultSessionRepository() : undefined);
+		if (state.activeSessionCode && targetRepo) {
+			targetRepo
+				.updateStatus?.(state.activeSessionCode, "expired")
+				.catch(() => {});
+		}
 	},
 
 	skipIntro: () => {
-		const newEvent = {
+		const state = get();
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const newEvent: MirrorEvent = {
 			id: `ev-${Date.now()}`,
 			type: "time_skip",
 			actor: "Operador",
 			details: "Intro omitida",
-			time: "00:00",
+			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
 		};
-		set((state) => ({
-			recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
+
+		state.syncBus?.send({
+			type: "SKIP_INTRO",
+		});
+
+		set((s) => ({
+			recentEvents: [newEvent, ...s.recentEvents].slice(0, 20),
 		}));
 	},
 
@@ -775,12 +1225,14 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 			retiredAt: timeStr,
 		});
 
-		const newEvent = {
+		const newEvent: MirrorEvent = {
 			id: `ev-${Date.now()}`,
 			type: "press",
 			actor: "Operador",
 			details: `Alumno ${studentName} retirado (${timeStr})`,
 			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
 		};
 
 		set({
@@ -817,15 +1269,34 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 	},
 
 	retryService: () => {
-		const newEvent = {
+		const state = get();
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const newEvent: MirrorEvent = {
 			id: `ev-${Date.now()}`,
 			type: "speech_start",
 			actor: "Operador",
 			details: "Reintento de llamada IA desbloqueado",
-			time: "00:00",
+			time: timeStr,
+			game_ts_ms: elapsedSeconds * 1000,
+			wall_ts_ms: Date.now(),
 		};
-		set((state) => ({
-			recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
+
+		state.syncBus?.send({
+			type: "RETRY_SERVICE",
+		});
+
+		set((s) => ({
+			isTimerPaused: false,
+			pauseReason: null,
+			consoleError: null,
+			recentEvents: [newEvent, ...s.recentEvents].slice(0, 20),
 		}));
 	},
 

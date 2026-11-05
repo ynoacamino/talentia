@@ -170,7 +170,7 @@ export function RightRail({ cards: propCards }: RightRailProps = {}) {
 								)}
 								{isRetired && (
 									<span className="text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider bg-red-950 text-red-300 border border-red-800">
-										Retirado
+										{card.retiredAt ? `Retirado ${card.retiredAt}` : "Retirado"}
 									</span>
 								)}
 							</div>

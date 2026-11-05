@@ -9,6 +9,7 @@ import type { ISessionRepository } from "@/shared/documents.ts";
 import { DocenteView } from "@/ui/teacher/DocenteView.tsx";
 import { LiveMirror } from "@/ui/teacher/LiveMirror.tsx";
 import { NewSessionForm } from "@/ui/teacher/NewSessionForm.tsx";
+import { OperatorConsole } from "@/ui/teacher/OperatorConsole.tsx";
 import { PastSessionsList } from "@/ui/teacher/PastSessionsList.tsx";
 import { useTeacherStore } from "@/ui/teacher/teacherStore.ts";
 
@@ -17,13 +18,16 @@ export interface TeacherLayoutProps {
 }
 
 export function TeacherLayout({ repo }: TeacherLayoutProps = {}) {
+	const storeHook = useTeacherStore();
+	const store =
+		typeof window === "undefined" ? useTeacherStore.getState() : storeHook;
 	const {
 		activeTab,
 		setActiveTab,
 		isBgmMuted,
 		toggleBgmMute,
 		activeSessionCode,
-	} = useTeacherStore();
+	} = store;
 
 	const tabs: Array<{ id: typeof activeTab; label: string; icon: string }> = [
 		{ id: "form", label: "Nueva Sesión", icon: "➕" },
@@ -72,6 +76,7 @@ export function TeacherLayout({ repo }: TeacherLayoutProps = {}) {
 					{/* Mute BGM exclusivo en /teacher */}
 					<button
 						type="button"
+						data-testid="bgm-mute-btn"
 						onClick={toggleBgmMute}
 						className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
 							isBgmMuted
@@ -97,7 +102,12 @@ export function TeacherLayout({ repo }: TeacherLayoutProps = {}) {
 			{/* Contenedor Principal Scrollable */}
 			<main className="flex-1 overflow-y-auto">
 				{activeTab === "form" && <NewSessionForm repo={repo} />}
-				{activeTab === "live" && <LiveMirror repo={repo} />}
+				{activeTab === "live" && (
+					<div className="flex flex-col gap-6 max-w-6xl mx-auto p-6 select-none">
+						<LiveMirror repo={repo} />
+						<OperatorConsole repo={repo} />
+					</div>
+				)}
 				{activeTab === "docente" && <DocenteView repo={repo} />}
 				{activeTab === "past" && <PastSessionsList repo={repo} />}
 			</main>

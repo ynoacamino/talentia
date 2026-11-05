@@ -103,6 +103,29 @@ export type SyncMessage =
 				readonly organizacion: number;
 			};
 			readonly language?: Language;
+	  }
+	| {
+			readonly type: "TIME_SKIP";
+			readonly fromStation: string;
+			readonly toStation: string;
+	  }
+	| {
+			readonly type: "FORCE_GRANT";
+			readonly step: number;
+			readonly item: string;
+			readonly teacherAssisted: boolean;
+	  }
+	| {
+			readonly type: "REPLAY_NPC";
+			readonly stationId: string;
+			readonly npcName: string;
+			readonly text: string;
+	  }
+	| {
+			readonly type: "SKIP_INTRO";
+	  }
+	| {
+			readonly type: "RETRY_SERVICE";
 	  };
 
 export interface SessionSyncBus {

@@ -28,6 +28,7 @@ export interface StudentCard {
 	isConfirmed: boolean;
 	status: PlayerCardStatus;
 	isRetired: boolean;
+	retiredAt?: string;
 	turnsCount: number;
 	drawsCount: number;
 }
@@ -430,7 +431,12 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 				set((state) => {
 					const cards = state.cards.map((c, idx) =>
 						c.cardId === msg.studentId || idx === msg.slotIndex
-							? { ...c, isRetired: true, status: "idle" as PlayerCardStatus }
+							? {
+									...c,
+									isRetired: true,
+									retiredAt: msg.retiredAt,
+									status: "idle" as PlayerCardStatus,
+								}
 							: c,
 					);
 					return { cards };
@@ -453,6 +459,51 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 				if (msg.language) {
 					set({ language: msg.language });
 				}
+			} else if (msg.type === "TIME_SKIP") {
+				const rawTo = msg.toStation.toLowerCase();
+				const target = (
+					rawTo.includes("chacra")
+						? "chacra"
+						: rawTo.includes("taller")
+							? "taller"
+							: rawTo.includes("alcaldia") || rawTo.includes("alcaldía")
+								? "alcaldia"
+								: rawTo.includes("puente")
+									? "puente"
+									: rawTo
+				) as StationId;
+				set({ currentStation: target });
+			} else if (msg.type === "FORCE_GRANT") {
+				set((state) => {
+					const step = msg.step;
+					const inventory = { ...state.inventory };
+					if (step >= 1) inventory.madera = true;
+					if (step >= 2) inventory.plano = true;
+					if (step >= 3) inventory.sello = true;
+					const groupScores = state.groupScores
+						? {
+								...state.groupScores,
+								estructurada: Math.min(1, state.groupScores.estructurada),
+							}
+						: undefined;
+					return {
+						checklistStep: step,
+						inventory,
+						teacherAssisted: true,
+						groupScores,
+					};
+				});
+			} else if (msg.type === "REPLAY_NPC") {
+				get().addSubtitle({
+					speakerName: msg.npcName,
+					speakerColor: "#ffffff",
+					speakerType: "npc",
+					text: msg.text,
+				});
+			} else if (msg.type === "SKIP_INTRO") {
+				get().startActiveGame();
+			} else if (msg.type === "RETRY_SERVICE") {
+				set({ isTimerPaused: false, pauseReason: null, shakeMessage: null });
 			}
 		});
 
@@ -726,6 +777,7 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 			sessionStatus: "finished",
 			endType: "victory",
 			checklistStep: 3,
+			isTimerPaused: true,
 			inventory: { madera: true, plano: true, sello: true },
 			...(scores ? { groupScores: scores } : {}),
 		});
@@ -736,6 +788,7 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 			phase: "end",
 			sessionStatus: "expired",
 			endType: "partial",
+			isTimerPaused: true,
 			...(scores ? { groupScores: scores } : {}),
 		});
 	},
@@ -764,7 +817,12 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 	},
 }));
 
+declare global {
+	interface Window {
+		__playStore?: typeof usePlayStore;
+	}
+}
+
 if (typeof window !== "undefined") {
-	(window as unknown as { __playStore?: typeof usePlayStore }).__playStore =
-		usePlayStore;
+	window.__playStore = usePlayStore;
 }

@@ -39,6 +39,7 @@ export interface EquipoEndScreenProps {
 	earnedBadgeIds?: BadgeId[];
 	badgeQuotes?: Partial<Record<BadgeId, string>>;
 	judgeScores?: JudgeScores | null;
+	teacherAssisted?: boolean;
 }
 
 export function EquipoEndScreen({
@@ -50,6 +51,7 @@ export function EquipoEndScreen({
 	earnedBadgeIds: propBadgeIds,
 	badgeQuotes: propBadgeQuotes,
 	judgeScores: propJudgeScores,
+	teacherAssisted: propTeacherAssisted,
 }: EquipoEndScreenProps = {}) {
 	const storeHook = usePlayStore();
 	const store =
@@ -117,17 +119,29 @@ export function EquipoEndScreen({
 			: starsFor(sumPoints, isVictory);
 
 	// Determinar qué criterios alcanzaron 2/2 (o badges explícitos)
+	const isAssisted = Boolean(
+		propTeacherAssisted ??
+			store.teacherAssisted ??
+			propJudgeScores?.conApoyoDocente,
+	);
+
 	let rawBadgeIds: BadgeId[] = [];
 	if (propBadgeIds) {
 		rawBadgeIds = [...propBadgeIds];
 	} else if (propJudgeScores?.earnedBadges) {
 		rawBadgeIds = propJudgeScores.earnedBadges.map((b) => b.id);
 	} else {
-		if (scores.estructurada === 2) rawBadgeIds.push("paso_a_paso");
+		if (scores.estructurada === 2 && !isAssisted)
+			rawBadgeIds.push("paso_a_paso");
 		if (scores.negociacion === 2) rawBadgeIds.push("cumplieron_su_promesa");
 		if (scores.colaboracion === 2) rawBadgeIds.push("un_solo_equipo");
 		if (scores.turnTaking === 2) rawBadgeIds.push("se_turnaron");
 		if (scores.organizacion === 2) rawBadgeIds.push("se_organizaron");
+	}
+
+	// Regla estricta SPEC §11: si hubo apoyo docente, 'Paso a paso' queda excluida
+	if (isAssisted) {
+		rawBadgeIds = rawBadgeIds.filter((b) => b !== "paso_a_paso");
 	}
 
 	// Filtrar y ordenar por prioridad estricta de contrato (máximo 3)
