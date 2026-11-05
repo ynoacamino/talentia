@@ -1,20 +1,30 @@
 /**
- * EquipoEndScreen — Pantalla Final de Equipo ([PLAY-06], [PLAY-07])
- * Conforme a SPEC §1, §10, §11, §19:
- * Victoria ([PLAY-06]):
- * - Arte del puente listo
- * - Pop animado de 1 a 3 estrellas (1-3★) calculado por starsFor()
- * - ≤3 insignias ganadas priorizadas por badgePriority()
- * - Indicador 3/3
- * - Animación confetti CSS
- * - PRIVACIDAD ESTRICTA: CERO nombres de alumnos, CERO notas numéricas o rankings.
+ * EquipoEndScreen — Pantalla Final de Equipo ([PLAY-06], [PLAY-07], Superficie D3)
+ * Conforme a SPEC §1, §10, §11, §12, §19 & docs/gates/F0-contrato.md:
  *
- * Fin Parcial ([PLAY-07]):
- * - Título exacto: "Misión en curso X/3"
- * - Estrellas retenidas (no se muestra ninguna)
- * - Solo insignias ganadas (badges-only)
+ * Victoria ([PLAY-06]):
+ * - Título exacto locked string: '¡Puente listo!' (SPEC §19).
+ * - Arte del puente completado.
+ * - Animación de confeti CSS/Canvas y pop animado de estrellas (1-3★ calculado estrictamente con starsFor).
+ * - Hasta 3 insignias ganadas priorizadas estrictamente con badgePriority:
+ *   Paso a paso > Cumplieron su promesa > Un solo equipo > Se turnaron > Se organizaron.
+ * - Cita conductual de evidencia de cada insignia EN EL IDIOMA DE LA PARTIDA (ES, EN, QUZ).
+ * - Indicador de pasos: '3/3' (o '¡Puente listo!').
+ *
+ * Fin Parcial / Expiración de tiempo ([PLAY-07]):
+ * - Título exacto locked string: 'Misión en curso X/3' (SPEC §19).
+ * - Insignias ganadas hasta el momento (badges-only).
+ * - ESTRELLAS RETENIDAS (stars === null): NO se muestra ninguna estrella (estrellas retenidas según SPEC §1, §11).
+ *
+ * PRIVACIDAD ESTRICTA:
+ * - CERO nombres de alumnos, CERO números individuales, CERO calificaciones o rankings comparativos.
+ * - Si la partida tuvo asistencia docente ('con apoyo docente', forced=true o time_skip),
+ *   en /play NUNCA se muestra ninguna etiqueta ni advertencia de penalización;
+ *   los niños ven las estrellas juzgadas sin delatar ayuda docente.
  */
+
 import { useEffect, useState } from "react";
+import type { JudgeScores, Language } from "@/shared/documents.ts";
 import { type BadgeId, badgePriority, starsFor } from "@/shared/scoring.ts";
 import { usePlayStore } from "@/ui/play/playStore.ts";
 import { BADGE_DEFINITIONS, type GroupScores } from "@/ui/tokens/badges.ts";
@@ -25,7 +35,10 @@ export interface EquipoEndScreenProps {
 	endType?: "victory" | "partial" | null;
 	checklistStep?: number;
 	onReset?: () => void;
-	lang?: "ES" | "EN" | "QUZ";
+	lang?: Language;
+	earnedBadgeIds?: BadgeId[];
+	badgeQuotes?: Partial<Record<BadgeId, string>>;
+	judgeScores?: JudgeScores | null;
 }
 
 export function EquipoEndScreen({
@@ -33,53 +46,106 @@ export function EquipoEndScreen({
 	endType: propEndType,
 	checklistStep: propChecklistStep,
 	onReset: propReset,
-	lang = "ES",
+	lang: propLang,
+	earnedBadgeIds: propBadgeIds,
+	badgeQuotes: propBadgeQuotes,
+	judgeScores: propJudgeScores,
 }: EquipoEndScreenProps = {}) {
-	const store = usePlayStore();
+	const storeHook = usePlayStore();
+	const store =
+		typeof window === "undefined" ? usePlayStore.getState() : storeHook;
 
-	const endType = propEndType ?? store.endType;
+	const endType =
+		propEndType ??
+		store.endType ??
+		(store.sessionStatus === "finished"
+			? "victory"
+			: store.sessionStatus === "expired"
+				? "partial"
+				: null);
+
 	const checklistStep = propChecklistStep ?? store.checklistStep;
 	const resetToLobby = propReset ?? store.resetToLobby;
-
-	const [confettiPieces, setConfettiPieces] = useState<
-		Array<{ id: number; left: number; delay: number; color: string }>
-	>([]);
+	const lang: Language = propLang ?? store.language ?? "ES";
 
 	const isVictory = endType === "victory";
 
-	// Usar puntajes provistos por prop o fallback a estado inicial del equipo
-	const scores: GroupScores = propScores ?? {
-		turnTaking: 2,
-		colaboracion: 2,
-		negociacion: 2,
-		estructurada: 2,
-		organizacion: 1,
-	};
+	const [confettiPieces, setConfettiPieces] = useState<
+		Array<{ id: number; left: number; delay: number; color: string }>
+	>(() => {
+		if (!isVictory) return [];
+		const colors = [
+			"#f59e0b",
+			"#10b981",
+			"#3b82f6",
+			"#ec4899",
+			"#8b5cf6",
+			"#ef4444",
+		];
+		return Array.from({ length: 40 }).map((_, i) => ({
+			id: i,
+			left: (i * 2.5) % 98,
+			delay: (i * 0.1) % 2.5,
+			color: colors[i % colors.length] ?? "#f59e0b",
+		}));
+	});
+
+	// Usar puntajes provistos por prop o fallback a estado del store / defaults
+	const scores: GroupScores = propScores ??
+		store.groupScores ?? {
+			turnTaking: 2,
+			colaboracion: 2,
+			negociacion: 2,
+			estructurada: 2,
+			organizacion: 1,
+		};
 
 	// Cálculo puro de estrellas con función de dominio (@/shared/scoring.ts)
+	// Si no es victoria, las estrellas se retienen estrictamente (null)
 	const sumPoints =
 		scores.turnTaking +
 		scores.colaboracion +
 		scores.negociacion +
 		scores.estructurada +
 		scores.organizacion;
-	const stars = starsFor(sumPoints, isVictory);
 
-	// Determinar qué criterios alcanzaron 2/2
-	const earnedBadgeIds: BadgeId[] = [];
-	if (scores.estructurada === 2) earnedBadgeIds.push("paso_a_paso");
-	if (scores.negociacion === 2) earnedBadgeIds.push("cumplieron_su_promesa");
-	if (scores.colaboracion === 2) earnedBadgeIds.push("un_solo_equipo");
-	if (scores.turnTaking === 2) earnedBadgeIds.push("se_turnaron");
-	if (scores.organizacion === 2) earnedBadgeIds.push("se_organizaron");
+	const stars =
+		propJudgeScores?.stars !== undefined && propJudgeScores !== null
+			? isVictory
+				? propJudgeScores.stars
+				: null
+			: starsFor(sumPoints, isVictory);
+
+	// Determinar qué criterios alcanzaron 2/2 (o badges explícitos)
+	let rawBadgeIds: BadgeId[] = [];
+	if (propBadgeIds) {
+		rawBadgeIds = [...propBadgeIds];
+	} else if (propJudgeScores?.earnedBadges) {
+		rawBadgeIds = propJudgeScores.earnedBadges.map((b) => b.id);
+	} else {
+		if (scores.estructurada === 2) rawBadgeIds.push("paso_a_paso");
+		if (scores.negociacion === 2) rawBadgeIds.push("cumplieron_su_promesa");
+		if (scores.colaboracion === 2) rawBadgeIds.push("un_solo_equipo");
+		if (scores.turnTaking === 2) rawBadgeIds.push("se_turnaron");
+		if (scores.organizacion === 2) rawBadgeIds.push("se_organizaron");
+	}
 
 	// Filtrar y ordenar por prioridad estricta de contrato (máximo 3)
-	const prioritizedIds = badgePriority(earnedBadgeIds);
+	// 1. Paso a paso > 2. Cumplieron su promesa > 3. Un solo equipo > 4. Se turnaron > 5. Se organizaron
+	const prioritizedIds = badgePriority(rawBadgeIds);
 	const earnedBadges = prioritizedIds
 		.map((id) => {
 			const def = BADGE_DEFINITIONS.find((b) => b.id === id);
 			if (!def) return null;
-			const quote = def.defaultQuote[lang] || def.defaultQuote.ES;
+			const customQuote = propBadgeQuotes?.[id] ?? store.badgeQuotes?.[id];
+			const judgeQuote = propJudgeScores?.earnedBadges.find(
+				(b) => b.id === id,
+			)?.quoteInRunLanguage;
+			const quote =
+				customQuote ||
+				judgeQuote ||
+				def.defaultQuote[lang] ||
+				def.defaultQuote.ES;
 			return { badge: def, quote };
 		})
 		.filter((b): b is NonNullable<typeof b> => b !== null);
@@ -102,16 +168,24 @@ export function EquipoEndScreen({
 				color: colors[i % colors.length] ?? "#f59e0b",
 			}));
 			setConfettiPieces(pieces);
+		} else {
+			setConfettiPieces([]);
 		}
 	}, [isVictory]);
 
 	if (!endType) return null;
 
 	return (
-		<div className="fixed inset-0 bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center justify-between p-8 z-50 select-none overflow-y-auto">
+		<div
+			data-testid="equipo-end-screen"
+			className="fixed inset-0 bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center justify-between p-8 z-50 select-none overflow-y-auto"
+		>
 			{/* Confetti CSS si es Victoria */}
 			{isVictory && (
-				<div className="absolute inset-0 pointer-events-none overflow-hidden">
+				<div
+					data-testid="confetti-container"
+					className="absolute inset-0 pointer-events-none overflow-hidden"
+				>
 					{confettiPieces.map((p) => (
 						<div
 							key={p.id}
@@ -131,7 +205,10 @@ export function EquipoEndScreen({
 				<div className="text-sm uppercase font-black tracking-widest text-amber-400 mb-2">
 					{isVictory ? "¡Objetivo Colectivo Logrado!" : "Sesión Finalizada"}
 				</div>
-				<h1 className="text-4xl md:text-5xl font-black text-white tracking-tight animate-pop">
+				<h1
+					data-testid="end-screen-title"
+					className="text-4xl md:text-5xl font-black text-white tracking-tight animate-pop"
+				>
 					{isVictory
 						? LOCKED_STRINGS.WIN_TITLE
 						: LOCKED_STRINGS.PARTIAL_TITLE(checklistStep)}
@@ -150,20 +227,29 @@ export function EquipoEndScreen({
 					<div className="text-6xl animate-pop">
 						{isVictory ? "🌉 ✨" : "🪵 🌾"}
 					</div>
-					<div className="absolute bottom-3 px-3 py-1 rounded-full bg-slate-950/80 border border-slate-700 text-xs font-bold text-amber-300">
-						{isVictory ? "Pasos: 3/3 Completos" : `Pasos: ${checklistStep}/3`}
+					<div
+						data-testid="steps-indicator"
+						className="absolute bottom-3 px-3 py-1 rounded-full bg-slate-950/80 border border-slate-700 text-xs font-bold text-amber-300"
+					>
+						{isVictory
+							? "Pasos: 3/3 (¡Puente listo!)"
+							: `Pasos: ${checklistStep}/3`}
 					</div>
 				</div>
 
 				{/* Despliegue de Estrellas (1-3★ Pop Animado) o Retenidas */}
 				{isVictory && stars !== null ? (
 					<div className="flex flex-col items-center gap-2">
-						<div className="flex items-center gap-4">
+						<div
+							data-testid="stars-container"
+							className="flex items-center gap-4"
+						>
 							{[1, 2, 3].map((starNum) => {
 								const isEarned = starNum <= stars;
 								return (
 									<div
 										key={`star-slot-${starNum}`}
+										data-testid={`star-${starNum}`}
 										style={{ animationDelay: `${starNum * 200}ms` }}
 										className={`text-5xl transition-all ${
 											isEarned
@@ -176,30 +262,37 @@ export function EquipoEndScreen({
 								);
 							})}
 						</div>
-						<div className="text-xs font-black uppercase tracking-wider text-amber-300">
+						<div
+							data-testid="stars-count-label"
+							className="text-xs font-black uppercase tracking-wider text-amber-300"
+						>
 							{stars === 3
-								? "¡Excelente coordinación de equipo!"
+								? "¡Excelente coordinación de equipo! (3★)"
 								: stars === 2
-									? "¡Buen trabajo cooperativo!"
-									: "¡Primer paso de trabajo grupal!"}
+									? "¡Buen trabajo cooperativo! (2★)"
+									: "¡Primer paso de trabajo grupal! (1★)"}
 						</div>
 					</div>
 				) : (
-					<div className="px-5 py-2.5 rounded-2xl bg-slate-900 border border-slate-700 text-xs font-bold text-slate-400">
-						⭐ Estrellas retenidas (Misión en curso)
+					<div
+						data-testid="stars-withheld"
+						className="px-5 py-2.5 rounded-2xl bg-slate-900 border border-slate-700 text-xs font-bold text-slate-400"
+					>
+						Estrellas retenidas (misión en curso)
 					</div>
 				)}
 			</div>
 
 			{/* Insignias de Honor del Grupo (≤ 3 Badges con Cita en Idioma de la Partida) */}
-			<div className="w-full max-w-3xl">
+			<div data-testid="badges-container" className="w-full max-w-3xl">
 				<div className="text-xs font-black uppercase tracking-widest text-slate-400 text-center mb-3">
-					Insignias de Cooperación Colectiva (Máximo 3):
+					Insignias de Cooperación Colectiva (Hasta 3):
 				</div>
 				<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 					{earnedBadges.map(({ badge, quote }) => (
 						<div
 							key={badge.id}
+							data-testid={`badge-${badge.id}`}
 							className="p-4 rounded-2xl bg-slate-900/90 border-2 border-amber-400/40 shadow-xl flex flex-col justify-between gap-3 animate-pop"
 						>
 							<div className="flex items-center gap-3">
@@ -215,7 +308,10 @@ export function EquipoEndScreen({
 							</div>
 
 							{/* Cita de evidencia conductual en idioma de la partida */}
-							<div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] font-medium text-slate-200 italic">
+							<div
+								data-testid={`badge-quote-${badge.id}`}
+								className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] font-medium text-slate-200 italic"
+							>
 								"{quote}"
 							</div>
 						</div>
@@ -226,8 +322,7 @@ export function EquipoEndScreen({
 			{/* Footer con Privacidad Estricta y Botón Volver */}
 			<div className="w-full max-w-2xl flex items-center justify-between border-t border-slate-800 pt-4 mt-6">
 				<div className="text-[11px] text-slate-400">
-					Evaluación grupal colectiva. Cero calificaciones numéricas ni rankings
-					individuales.
+					Evaluación grupal colectiva. Refuerzo positivo del trabajo en equipo.
 				</div>
 				<button
 					type="button"

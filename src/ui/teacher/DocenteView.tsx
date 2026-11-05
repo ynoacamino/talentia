@@ -15,6 +15,7 @@ import { useState } from "react";
 import type {
 	CriterionScore,
 	ISessionRepository,
+	JudgeScores,
 	SessionComment,
 	SessionRecord,
 } from "@/shared/documents.ts";
@@ -32,6 +33,7 @@ import { LOCKED_STRINGS } from "@/ui/tokens/strings.ts";
 
 export interface DocenteViewProps {
 	sessionRecord?: SessionRecord | null;
+	scores?: JudgeScores | null;
 	groupScores?: GroupScores;
 	groupQuotes?: Record<string, string>;
 	studentEvals?: StudentEvaluation[];
@@ -47,6 +49,7 @@ export function DocenteView(props: DocenteViewProps): React.JSX.Element;
 export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 	const {
 		sessionRecord,
+		scores: propScoresObj,
 		groupScores: propScores,
 		groupQuotes: propQuotes,
 		studentEvals: propEvals,
@@ -58,46 +61,42 @@ export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 	} = props;
 	const store = useTeacherStore();
 
+	const effectiveScores: JudgeScores | null =
+		propScoresObj ?? sessionRecord?.scores ?? null;
+
 	// Active tab inside inspection view
 	const [activeTab, setActiveTab] = useState<
 		"all" | "eval" | "transcripts" | "drawings"
 	>("all");
 
-	// Derive values from sessionRecord if provided
-	const derivedScores: GroupScores | undefined = sessionRecord?.scores
+	// Derive values from effectiveScores or sessionRecord
+	const derivedScores: GroupScores | undefined = effectiveScores
 		? {
-				turnTaking: sessionRecord.scores.groupCriteria.turnTaking.score,
-				colaboracion: sessionRecord.scores.groupCriteria.colaboracion.score,
-				negociacion: sessionRecord.scores.groupCriteria.negociacion.score,
+				turnTaking: effectiveScores.groupCriteria.turnTaking.score,
+				colaboracion: effectiveScores.groupCriteria.colaboracion.score,
+				negociacion: effectiveScores.groupCriteria.negociacion.score,
 				estructurada:
-					sessionRecord.scores.groupCriteria.resolucionEstructurada.score,
-				organizacion:
-					sessionRecord.scores.groupCriteria.organizacionLiderazgo.score,
+					effectiveScores.groupCriteria.resolucionEstructurada.score,
+				organizacion: effectiveScores.groupCriteria.organizacionLiderazgo.score,
 			}
 		: undefined;
 
-	const derivedQuotes: Record<string, string> | undefined =
-		sessionRecord?.scores
-			? {
-					turnTaking:
-						sessionRecord.scores.groupCriteria.turnTaking.evidenceQuote,
-					colaboracion:
-						sessionRecord.scores.groupCriteria.colaboracion.evidenceQuote,
-					negociacion:
-						sessionRecord.scores.groupCriteria.negociacion.evidenceQuote,
-					estructurada:
-						sessionRecord.scores.groupCriteria.resolucionEstructurada
-							.evidenceQuote,
-					organizacion:
-						sessionRecord.scores.groupCriteria.organizacionLiderazgo
-							.evidenceQuote,
-				}
-			: undefined;
+	const derivedQuotes: Record<string, string> | undefined = effectiveScores
+		? {
+				turnTaking: effectiveScores.groupCriteria.turnTaking.evidenceQuote,
+				colaboracion: effectiveScores.groupCriteria.colaboracion.evidenceQuote,
+				negociacion: effectiveScores.groupCriteria.negociacion.evidenceQuote,
+				estructurada:
+					effectiveScores.groupCriteria.resolucionEstructurada.evidenceQuote,
+				organizacion:
+					effectiveScores.groupCriteria.organizacionLiderazgo.evidenceQuote,
+			}
+		: undefined;
 
-	const derivedEvals: StudentEvaluation[] | undefined = sessionRecord?.scores
-		? sessionRecord.scores.students.map((s) => ({
+	const derivedEvals: StudentEvaluation[] | undefined = effectiveScores
+		? effectiveScores.students.map((s) => ({
 				studentId: s.playerId,
-				studentName: s.name,
+				studentName: s.name.slice(0, 10),
 				avatarId: s.avatar.toLowerCase(),
 				participacion: s.participacion,
 				propuesta: s.propuesta,
@@ -110,7 +109,7 @@ export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 		: sessionRecord?.players && sessionRecord.players.length > 0
 			? sessionRecord.players.map((p) => ({
 					studentId: p.playerId,
-					studentName: p.name,
+					studentName: p.name.slice(0, 10),
 					avatarId: p.avatar.toLowerCase(),
 					participacion: 0 as CriterionScore,
 					propuesta: 0 as CriterionScore,
@@ -122,10 +121,20 @@ export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 				}))
 			: undefined;
 
-	const derivedAssisted = sessionRecord
-		? (sessionRecord.scores?.conApoyoDocente ??
-			sessionRecord.checklist.some((s) => s.forced))
-		: undefined;
+	const derivedAssisted = effectiveScores
+		? effectiveScores.conApoyoDocente
+		: sessionRecord
+			? Boolean(
+					sessionRecord.scores?.conApoyoDocente ||
+						sessionRecord.checklist?.some((s) => s.forced) ||
+						sessionRecord.events?.some(
+							(e) =>
+								(e.type === "grant_step" &&
+									(e.payload as { forced?: boolean })?.forced) ||
+								e.type === "time_skip",
+						),
+				)
+			: undefined;
 
 	const groupScores = propScores ?? derivedScores ?? store.groupScores;
 	const groupQuotes = propQuotes ?? derivedQuotes ?? store.groupQuotes;
@@ -133,12 +142,18 @@ export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 	const teacherAssisted =
 		propAssisted ?? derivedAssisted ?? store.teacherAssisted;
 	const activeSessionCode =
-		propSessionCode ?? sessionRecord?.code ?? store.activeSessionCode;
+		propSessionCode ??
+		effectiveScores?.sessionId ??
+		sessionRecord?.code ??
+		store.activeSessionCode;
 
 	const liveStars = useGroupStars();
-	const stars = sessionRecord
-		? (sessionRecord.scores?.stars ?? null)
-		: liveStars;
+	const stars =
+		effectiveScores !== null
+			? effectiveScores.stars
+			: sessionRecord
+				? (sessionRecord.scores?.stars ?? null)
+				: liveStars;
 
 	const transcripts = sessionRecord?.transcripts ?? [];
 	const drawings = sessionRecord?.drawings ?? [];
@@ -304,19 +319,45 @@ export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 											</span>
 										))}
 										<span className="text-xs text-slate-400 ml-1">
-											({stars}/3)
+											{`(${stars}/3)`}
 										</span>
 									</div>
 								) : (
 									<span
 										data-testid="stars-retained-msg"
-										className="text-xs text-slate-400 italic"
+										className="text-base text-slate-400 font-bold"
 									>
-										Estrellas retenidas
+										—{" "}
+										<span className="text-xs font-normal italic text-slate-500">
+											(Estrellas retenidas)
+										</span>
 									</span>
 								)}
 							</div>
 						</div>
+
+						{/* Insignias Otorgadas por el Jurado (Top 3 - SPEC §11) */}
+						{effectiveScores?.earnedBadges &&
+							effectiveScores.earnedBadges.length > 0 && (
+								<div
+									data-testid="docente-earned-badges"
+									className="flex items-center gap-2 flex-wrap p-3 rounded-2xl bg-slate-950/60 border border-slate-800"
+								>
+									<span className="text-xs text-slate-400 font-bold">
+										Insignias otorgadas (máx 3):
+									</span>
+									{effectiveScores.earnedBadges.map((badge) => (
+										<span
+											key={badge.id}
+											data-testid={`earned-badge-${badge.id}`}
+											className="px-2.5 py-1 rounded-xl bg-indigo-950/80 border border-indigo-700/80 text-xs font-bold text-indigo-200 flex items-center gap-1.5"
+										>
+											<span>🏅</span>
+											<span>{badge.name}</span>
+										</span>
+									))}
+								</div>
+							)}
 
 						{/* 5 Criterios 0-2 con Citas Textuales (§11, i18n tDocente) */}
 						<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -398,7 +439,7 @@ export function DocenteView(props: DocenteViewProps = {}): React.JSX.Element {
 													data-testid="student-card-name"
 													className="text-base font-black text-white"
 												>
-													{student.studentName}
+													{student.studentName.slice(0, 10)}
 												</h4>
 												<div className="text-[11px] text-slate-400 capitalize">
 													Avatar: {student.avatarId}

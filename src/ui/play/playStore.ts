@@ -12,8 +12,12 @@ import { getDefaultSessionRepository } from "@/game/stores/sessionRepository.ts"
 import type {
 	ISessionRepository,
 	ISyncSessionRepository,
+	Language,
+	SessionStatus,
 } from "@/shared/documents.ts";
+import type { BadgeId } from "@/shared/scoring.ts";
 import { KID_AVATARS } from "@/ui/tokens/avatars.ts";
+import type { GroupScores } from "@/ui/tokens/badges.ts";
 import type { PlayerCardStatus } from "@/ui/tokens/colors.ts";
 
 export interface StudentCard {
@@ -144,9 +148,19 @@ export interface PlayState {
 
 	// Fin de equipo ([PLAY-06], [PLAY-07])
 	endType: "victory" | "partial" | null;
+	sessionStatus: SessionStatus;
+	language: Language;
+	groupScores?: GroupScores;
+	badgeQuotes?: Partial<Record<BadgeId, string>>;
+	teacherAssisted?: boolean;
 
 	// Acciones
 	setSessionCode: (code: string) => void;
+	setLanguage: (lang: Language) => void;
+	setSessionStatus: (status: SessionStatus) => void;
+	setGroupScores: (scores: GroupScores) => void;
+	setBadgeQuotes: (quotes: Partial<Record<BadgeId, string>>) => void;
+	setTeacherAssisted: (assisted: boolean) => void;
 	joinSession: (
 		code: string,
 		repoOrPlayersCount?: ISessionRepository | ISyncSessionRepository | number,
@@ -177,8 +191,8 @@ export interface PlayState {
 	submitDrawing: () => void;
 
 	// Fin
-	triggerVictory: () => void;
-	triggerPartialEnd: () => void;
+	triggerVictory: (scores?: GroupScores) => void;
+	triggerPartialEnd: (scores?: GroupScores) => void;
 	resetToLobby: () => void;
 }
 
@@ -275,8 +289,26 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 
 	shakeMessage: null,
 	endType: null,
+	sessionStatus: "created",
+	language: "ES",
+	groupScores: undefined,
+	badgeQuotes: undefined,
+	teacherAssisted: false,
 
 	setSessionCode: (code) => set({ sessionCode: code.toUpperCase() }),
+	setLanguage: (lang) => set({ language: lang }),
+	setSessionStatus: (status) => {
+		if (status === "finished") {
+			get().triggerVictory();
+		} else if (status === "expired") {
+			get().triggerPartialEnd();
+		} else {
+			set({ sessionStatus: status });
+		}
+	},
+	setGroupScores: (scores) => set({ groupScores: scores }),
+	setBadgeQuotes: (quotes) => set({ badgeQuotes: quotes }),
+	setTeacherAssisted: (assisted) => set({ teacherAssisted: assisted }),
 
 	joinSession: (code, repoOrPlayersCount) => {
 		const canonicalCode = code.trim().toUpperCase();
@@ -299,6 +331,15 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 			const rec = targetRepo.getByCodeSync(canonicalCode);
 			if (rec) {
 				playersCount = rec.config.expectedPlayers;
+				set({
+					language: rec.config.language,
+					sessionStatus: rec.status,
+				});
+				if (rec.status === "finished") {
+					get().triggerVictory();
+				} else if (rec.status === "expired") {
+					get().triggerPartialEnd();
+				}
 			}
 		}
 
@@ -394,6 +435,24 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 					);
 					return { cards };
 				});
+			} else if (msg.type === "SESSION_STATE_SYNC") {
+				if (msg.payload.language) {
+					set({ language: msg.payload.language });
+				}
+				if (msg.payload.status === "finished") {
+					get().triggerVictory();
+				} else if (msg.payload.status === "expired") {
+					get().triggerPartialEnd();
+				}
+			} else if (msg.type === "SESSION_END") {
+				if (msg.status === "finished") {
+					get().triggerVictory(msg.scores);
+				} else if (msg.status === "expired") {
+					get().triggerPartialEnd(msg.scores);
+				}
+				if (msg.language) {
+					set({ language: msg.language });
+				}
 			}
 		});
 
@@ -412,27 +471,38 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 			targetRepo
 				.getByCode(canonicalCode)
 				.then((rec) => {
-					if (rec && rec.config.expectedPlayers !== playersCount) {
-						const updatedCount = rec.config.expectedPlayers;
-						const updatedCards: StudentCard[] = [];
-						for (let i = 0; i < updatedCount; i++) {
-							const avatar = KID_AVATARS[i % KID_AVATARS.length];
-							updatedCards.push({
-								cardId: `card-${i + 1}`,
-								playerIndex: i,
-								avatarId: avatar?.id ?? "zorro",
-								studentName: "",
-								isConfirmed: false,
-								status: "idle",
-								isRetired: false,
-								turnsCount: 0,
-								drawsCount: 0,
+					if (rec) {
+						set({
+							language: rec.config.language,
+							sessionStatus: rec.status,
+						});
+						if (rec.status === "finished") {
+							get().triggerVictory();
+						} else if (rec.status === "expired") {
+							get().triggerPartialEnd();
+						}
+						if (rec.config.expectedPlayers !== playersCount) {
+							const updatedCount = rec.config.expectedPlayers;
+							const updatedCards: StudentCard[] = [];
+							for (let i = 0; i < updatedCount; i++) {
+								const avatar = KID_AVATARS[i % KID_AVATARS.length];
+								updatedCards.push({
+									cardId: `card-${i + 1}`,
+									playerIndex: i,
+									avatarId: avatar?.id ?? "zorro",
+									studentName: "",
+									isConfirmed: false,
+									status: "idle",
+									isRetired: false,
+									turnsCount: 0,
+									drawsCount: 0,
+								});
+							}
+							set({
+								expectedPlayers: updatedCount,
+								cards: updatedCards,
 							});
 						}
-						set({
-							expectedPlayers: updatedCount,
-							cards: updatedCards,
-						});
 					}
 				})
 				.catch(() => {});
@@ -650,17 +720,23 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 		});
 	},
 
-	triggerVictory: () => {
+	triggerVictory: (scores?: GroupScores) => {
 		set({
+			phase: "end",
+			sessionStatus: "finished",
 			endType: "victory",
 			checklistStep: 3,
 			inventory: { madera: true, plano: true, sello: true },
+			...(scores ? { groupScores: scores } : {}),
 		});
 	},
 
-	triggerPartialEnd: () => {
+	triggerPartialEnd: (scores?: GroupScores) => {
 		set({
+			phase: "end",
+			sessionStatus: "expired",
 			endType: "partial",
+			...(scores ? { groupScores: scores } : {}),
 		});
 	},
 
@@ -671,14 +747,24 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 		set({
 			phase: "join",
 			sessionCode: null,
+			sessionStatus: "created",
+			language: "ES",
 			cards: [],
 			selectedCardIndex: null,
 			syncBus: null,
 			countdownSeconds: 5,
 			endType: null,
+			groupScores: undefined,
+			badgeQuotes: undefined,
+			teacherAssisted: false,
 			checklistStep: 0,
 			inventory: { madera: false, plano: false, sello: false },
 			currentStation: "campamento",
 		});
 	},
 }));
+
+if (typeof window !== "undefined") {
+	(window as unknown as { __playStore?: typeof usePlayStore }).__playStore =
+		usePlayStore;
+}

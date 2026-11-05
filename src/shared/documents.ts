@@ -401,6 +401,10 @@ export interface JudgeEvaluationContext {
 	readonly drawings: readonly DrawSubmission[];
 	readonly events: readonly EventLogEntry[];
 	readonly hasTeacherSupport: boolean;
+	readonly isFinished?: boolean;
+	readonly sessionId?: string;
+	readonly rawScores?: Partial<GroupCriteriaBreakdown>;
+	readonly studentOverrides?: readonly Partial<StudentEvaluation>[];
 }
 
 // ============================================================================

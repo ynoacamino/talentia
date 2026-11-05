@@ -90,6 +90,19 @@ export type SyncMessage =
 	  }
 	| {
 			readonly type: "CONFIG_LOCKED";
+	  }
+	| {
+			readonly type: "SESSION_END";
+			readonly status: "finished" | "expired";
+			readonly endType?: "victory" | "partial";
+			readonly scores?: {
+				readonly turnTaking: number;
+				readonly colaboracion: number;
+				readonly negociacion: number;
+				readonly estructurada: number;
+				readonly organizacion: number;
+			};
+			readonly language?: Language;
 	  };
 
 export interface SessionSyncBus {
