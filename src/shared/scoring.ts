@@ -64,8 +64,12 @@ export const starsFor = calculateStars;
  */
 export function filterAndPrioritizeBadges(
 	earnedBadges: readonly BadgeId[],
+	hasTeacherSupport = false,
 ): BadgeId[] {
 	const badgeSet = new Set(earnedBadges);
+	if (hasTeacherSupport) {
+		badgeSet.delete("paso_a_paso" as BadgeId);
+	}
 	const prioritized: BadgeId[] = [];
 
 	for (const badge of BADGE_PRIORITY_ORDER) {

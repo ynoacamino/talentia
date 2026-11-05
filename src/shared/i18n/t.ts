@@ -13,25 +13,32 @@ import {
 } from "@/shared/i18n/lockedStrings.ts";
 import type { Language } from "@/shared/i18n/types.ts";
 
+type DictNode =
+	| string
+	| number
+	| boolean
+	| { readonly [key: string]: DictNode };
+
 /**
  * Helper to safely resolve a dot-path string inside an object.
  */
 function getNestedValue(
-	obj: Record<string, unknown>,
+	obj: { readonly [key: string]: DictNode },
 	path: string,
 ): string | undefined {
 	const segments = path.split(".");
-	let current: unknown = obj;
+	let current: DictNode | undefined = obj;
 
 	for (const segment of segments) {
 		if (
 			current === null ||
+			current === undefined ||
 			typeof current !== "object" ||
 			!(segment in current)
 		) {
 			return undefined;
 		}
-		current = (current as Record<string, unknown>)[segment];
+		current = current[segment];
 	}
 
 	return typeof current === "string" ? current : undefined;
@@ -85,14 +92,14 @@ export function t(
 	// 2. Resolve dictionary
 	const targetDict = dictionaries[lang] ?? esDictionary;
 	let value = getNestedValue(
-		targetDict as unknown as Record<string, unknown>,
+		targetDict as never as { readonly [key: string]: DictNode },
 		key,
 	);
 
 	// 3. Fallback to ES if missing
 	if (value === undefined && lang !== "ES") {
 		value = getNestedValue(
-			esDictionary as unknown as Record<string, unknown>,
+			esDictionary as never as { readonly [key: string]: DictNode },
 			key,
 		);
 	}

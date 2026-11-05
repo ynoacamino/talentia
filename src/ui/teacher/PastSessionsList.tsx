@@ -77,6 +77,9 @@ export function PastSessionsList(
 	);
 	const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
+	const [deletedSessionNotice, setDeletedSessionNotice] = useState<
+		string | null
+	>(null);
 
 	// Fetch past sessions list
 	const refreshList = useCallback(async () => {
@@ -166,6 +169,9 @@ export function PastSessionsList(
 			const updatedList = await activeRepo.listPast();
 			setSummaries(updatedList);
 			setSessionToDelete(null);
+			setDeletedSessionNotice(
+				`✓ Sesión ${code} eliminada de forma permanente e irreversible (Hard-Delete Ley 29733 completado)`,
+			);
 			onDeleteSession?.(code);
 		} finally {
 			setIsDeleting(false);
@@ -198,6 +204,26 @@ export function PastSessionsList(
 					{summaries.length} sesiones archivadas
 				</span>
 			</div>
+
+			{/* Banner de Confirmación de Borrado Ley 29733 */}
+			{deletedSessionNotice && (
+				<div
+					data-testid="deleted-session-confirmation"
+					className="px-4 py-3 rounded-2xl bg-emerald-950/90 border border-emerald-500/80 text-emerald-200 text-xs font-bold flex items-center justify-between gap-3 shadow-lg animate-fade-in"
+				>
+					<div className="flex items-center gap-2">
+						<span className="text-emerald-400 text-base">✓</span>
+						<span>{deletedSessionNotice}</span>
+					</div>
+					<button
+						type="button"
+						onClick={() => setDeletedSessionNotice(null)}
+						className="text-emerald-400 hover:text-emerald-200 text-xs cursor-pointer font-black"
+					>
+						✕
+					</button>
+				</div>
+			)}
 
 			{/* Tabla de 5 Columnas Obligatorias (Código, Fecha/Hora, Idioma, Jugadores, Resultado) */}
 			{isLoading && summaries.length === 0 ? (

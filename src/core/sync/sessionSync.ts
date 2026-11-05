@@ -126,6 +126,22 @@ export type SyncMessage =
 	  }
 	| {
 			readonly type: "RETRY_SERVICE";
+	  }
+	| {
+			readonly type: "AI_SERVICE_RETRYING";
+			readonly service: string;
+			readonly attempt: number;
+			readonly message?: string;
+	  }
+	| {
+			readonly type: "AI_SERVICE_BLOCKED";
+			readonly service: string;
+			readonly consecutiveFailures: number;
+			readonly message?: string;
+	  }
+	| {
+			readonly type: "AI_SERVICE_RESOLVED";
+			readonly service: string;
 	  };
 
 export interface SessionSyncBus {

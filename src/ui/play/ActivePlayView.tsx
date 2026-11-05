@@ -20,6 +20,9 @@ import { ZoomMapOverlay } from "@/ui/play/ZoomMapOverlay.tsx";
 import { LOCKED_STRINGS } from "@/ui/tokens/strings.ts";
 
 export function ActivePlayView() {
+	const storeHook = usePlayStore();
+	const store =
+		typeof window === "undefined" ? usePlayStore.getState() : storeHook;
 	const {
 		currentStation,
 		gameTimeSeconds,
@@ -28,7 +31,10 @@ export function ActivePlayView() {
 		isWalking,
 		shakeMessage,
 		endType,
-	} = usePlayStore();
+		isAiRetrying,
+		isAiBlocked,
+		aiRetryMessage,
+	} = store;
 
 	// Temporizador de juego
 	useEffect(() => {
@@ -108,6 +114,22 @@ export function ActivePlayView() {
 					<div className="px-6 py-3 rounded-2xl bg-amber-400 text-slate-950 font-black text-base shadow-2xl flex items-center gap-2">
 						<span>⚠️</span>
 						<span>{shakeMessage}</span>
+					</div>
+				</div>
+			)}
+
+			{/* Indicador Amigable Locked 'reintentando…' (SPEC §16) */}
+			{(isAiRetrying ||
+				isAiBlocked ||
+				pauseReason === "ai_retry" ||
+				pauseReason === "ai_blocked") && (
+				<div
+					data-testid="play-retry-indicator"
+					className="absolute top-24 left-1/2 -translate-x-1/2 z-50 animate-pop"
+				>
+					<div className="px-6 py-3 rounded-2xl bg-amber-400 text-slate-950 font-black text-base shadow-2xl flex items-center gap-3 border-2 border-amber-300">
+						<span className="text-xl animate-spin">⏳</span>
+						<span>{aiRetryMessage ?? "reintentando…"}</span>
 					</div>
 				</div>
 			)}

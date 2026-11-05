@@ -155,6 +155,11 @@ export interface PlayState {
 	badgeQuotes?: Partial<Record<BadgeId, string>>;
 	teacherAssisted?: boolean;
 
+	// Fiabilidad y Resiliencia (§16)
+	isAiRetrying: boolean;
+	isAiBlocked: boolean;
+	aiRetryMessage: string | null;
+
 	// Acciones
 	setSessionCode: (code: string) => void;
 	setLanguage: (lang: Language) => void;
@@ -162,6 +167,8 @@ export interface PlayState {
 	setGroupScores: (scores: GroupScores) => void;
 	setBadgeQuotes: (quotes: Partial<Record<BadgeId, string>>) => void;
 	setTeacherAssisted: (assisted: boolean) => void;
+	setAiRetrying: (retrying: boolean, message?: string) => void;
+	setAiBlocked: (blocked: boolean, message?: string) => void;
 	joinSession: (
 		code: string,
 		repoOrPlayersCount?: ISessionRepository | ISyncSessionRepository | number,
@@ -295,6 +302,9 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 	groupScores: undefined,
 	badgeQuotes: undefined,
 	teacherAssisted: false,
+	isAiRetrying: false,
+	isAiBlocked: false,
+	aiRetryMessage: null,
 
 	setSessionCode: (code) => set({ sessionCode: code.toUpperCase() }),
 	setLanguage: (lang) => set({ language: lang }),
@@ -310,6 +320,22 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 	setGroupScores: (scores) => set({ groupScores: scores }),
 	setBadgeQuotes: (quotes) => set({ badgeQuotes: quotes }),
 	setTeacherAssisted: (assisted) => set({ teacherAssisted: assisted }),
+	setAiRetrying: (retrying, message = "reintentando…") =>
+		set({
+			isAiRetrying: retrying,
+			isAiBlocked: false,
+			aiRetryMessage: retrying ? message : null,
+			isTimerPaused: retrying,
+			pauseReason: retrying ? "ai_retry" : null,
+		}),
+	setAiBlocked: (blocked, message = "reintentando…") =>
+		set({
+			isAiBlocked: blocked,
+			isAiRetrying: false,
+			aiRetryMessage: blocked ? message : null,
+			isTimerPaused: blocked,
+			pauseReason: blocked ? "ai_blocked" : null,
+		}),
 
 	joinSession: (code, repoOrPlayersCount) => {
 		const canonicalCode = code.trim().toUpperCase();
@@ -503,7 +529,38 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 			} else if (msg.type === "SKIP_INTRO") {
 				get().startActiveGame();
 			} else if (msg.type === "RETRY_SERVICE") {
-				set({ isTimerPaused: false, pauseReason: null, shakeMessage: null });
+				set({
+					isTimerPaused: false,
+					pauseReason: null,
+					shakeMessage: null,
+					isAiRetrying: false,
+					isAiBlocked: false,
+					aiRetryMessage: null,
+				});
+			} else if (msg.type === "AI_SERVICE_RETRYING") {
+				set({
+					isAiRetrying: true,
+					isAiBlocked: false,
+					aiRetryMessage: msg.message ?? "reintentando…",
+					isTimerPaused: true,
+					pauseReason: "ai_retry",
+				});
+			} else if (msg.type === "AI_SERVICE_BLOCKED") {
+				set({
+					isAiRetrying: false,
+					isAiBlocked: true,
+					aiRetryMessage: msg.message ?? "reintentando…",
+					isTimerPaused: true,
+					pauseReason: "ai_blocked",
+				});
+			} else if (msg.type === "AI_SERVICE_RESOLVED") {
+				set({
+					isAiRetrying: false,
+					isAiBlocked: false,
+					aiRetryMessage: null,
+					isTimerPaused: false,
+					pauseReason: null,
+				});
 			}
 		});
 
@@ -810,6 +867,9 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 			groupScores: undefined,
 			badgeQuotes: undefined,
 			teacherAssisted: false,
+			isAiRetrying: false,
+			isAiBlocked: false,
+			aiRetryMessage: null,
 			checklistStep: 0,
 			inventory: { madera: false, plano: false, sello: false },
 			currentStation: "campamento",

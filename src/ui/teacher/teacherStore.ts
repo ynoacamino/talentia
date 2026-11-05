@@ -3,6 +3,7 @@
  * Conforme a SPEC §2, §11, §13, §17
  */
 import { create } from "zustand";
+import { getAIRetryQueue } from "@/core/reliability/retryQueue.ts";
 import {
 	createSessionSyncBus,
 	type SessionSyncBus,
@@ -154,6 +155,11 @@ export interface TeacherState {
 	recentTranscripts: MirrorTranscript[];
 	recentEvents: MirrorEvent[];
 
+	// Fiabilidad y Resiliencia (§16)
+	isAiRetrying: boolean;
+	isAiBlocked: boolean;
+	blockedAiService: string | null;
+
 	// Panel Docente ([TEACH-03], §11)
 	groupScores: GroupScores;
 	groupQuotes: {
@@ -224,6 +230,8 @@ export interface TeacherState {
 		repo?: ISessionRepository | ISyncSessionRepository,
 	) => void;
 	retryService: () => void;
+	setAiRetrying: (retrying: boolean, service?: string) => void;
+	setAiBlocked: (blocked: boolean, service?: string) => void;
 
 	// Acciones de Comentarios (Add-Only §11, §13, D5)
 	addComment: (text: string) => void;
@@ -449,6 +457,9 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 		sello: false,
 	},
 	activeSubtitles: INITIAL_SUBTITLES,
+	isAiRetrying: false,
+	isAiBlocked: false,
+	blockedAiService: null,
 
 	recentTranscripts: INITIAL_TRANSCRIPTS,
 	recentEvents: INITIAL_EVENTS,
@@ -715,6 +726,39 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 							: s,
 					);
 					return { studentEvals: evals };
+				});
+			} else if (msg.type === "RETRY_SERVICE") {
+				set({
+					isTimerPaused: false,
+					pauseReason: null,
+					isAiBlocked: false,
+					isAiRetrying: false,
+					blockedAiService: null,
+					consoleError: null,
+				});
+			} else if (msg.type === "AI_SERVICE_RETRYING") {
+				set({
+					isAiRetrying: true,
+					isAiBlocked: false,
+					blockedAiService: msg.service,
+					isTimerPaused: true,
+					pauseReason: "ai_retry",
+				});
+			} else if (msg.type === "AI_SERVICE_BLOCKED") {
+				set({
+					isAiRetrying: false,
+					isAiBlocked: true,
+					blockedAiService: msg.service,
+					isTimerPaused: true,
+					pauseReason: "ai_blocked",
+				});
+			} else if (msg.type === "AI_SERVICE_RESOLVED") {
+				set({
+					isAiRetrying: false,
+					isAiBlocked: false,
+					blockedAiService: null,
+					isTimerPaused: false,
+					pauseReason: null,
 				});
 			}
 		});
@@ -1278,15 +1322,23 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 		const secs = elapsedSeconds % 60;
 		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 
+		const wallNow = Date.now();
+		const gameTs = elapsedSeconds * 1000;
+
 		const newEvent: MirrorEvent = {
-			id: `ev-${Date.now()}`,
+			id: `ev-${wallNow}`,
 			type: "speech_start",
 			actor: "Operador",
 			details: "Reintento de llamada IA desbloqueado",
 			time: timeStr,
-			game_ts_ms: elapsedSeconds * 1000,
-			wall_ts_ms: Date.now(),
+			game_ts_ms: gameTs,
+			wall_ts_ms: wallNow,
 		};
+
+		// Reintentar operaciones bloqueadas en la cola de fiabilidad
+		getAIRetryQueue()
+			.retryBlocked()
+			.catch(() => {});
 
 		state.syncBus?.send({
 			type: "RETRY_SERVICE",
@@ -1295,10 +1347,31 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 		set((s) => ({
 			isTimerPaused: false,
 			pauseReason: null,
+			isAiBlocked: false,
+			isAiRetrying: false,
+			blockedAiService: null,
 			consoleError: null,
 			recentEvents: [newEvent, ...s.recentEvents].slice(0, 20),
 		}));
 	},
+
+	setAiRetrying: (retrying, service = "IA") =>
+		set({
+			isAiRetrying: retrying,
+			isAiBlocked: false,
+			blockedAiService: retrying ? service : null,
+			isTimerPaused: retrying,
+			pauseReason: retrying ? "ai_retry" : null,
+		}),
+
+	setAiBlocked: (blocked, service = "IA") =>
+		set({
+			isAiBlocked: blocked,
+			isAiRetrying: false,
+			blockedAiService: blocked ? service : null,
+			isTimerPaused: blocked,
+			pauseReason: blocked ? "ai_blocked" : null,
+		}),
 
 	// Hilo de comentarios pedagógicos: estrictamente append-only (§11, §13, D5)
 	addComment: (text) => {

@@ -95,6 +95,36 @@ export function OperatorConsole({ repo }: OperatorConsoleProps = {}) {
 				</div>
 			)}
 
+			{/* Indicador Sincronizado de Reintento / Bloqueo IA (SPEC §16) */}
+			{(store.isAiRetrying || store.isAiBlocked) && (
+				<div
+					data-testid="teacher-retry-indicator"
+					className="px-4 py-3 rounded-2xl bg-amber-950/90 border border-amber-500/80 text-amber-200 text-xs font-bold flex items-center justify-between gap-3 animate-pulse"
+				>
+					<div className="flex items-center gap-2">
+						<span
+							data-testid="teacher-retry-spinner"
+							className="animate-spin text-base"
+						>
+							🔄
+						</span>
+						<span>
+							{store.isAiBlocked
+								? `La partida se encuentra bloqueada por fallo en el servicio IA (${store.blockedAiService ?? "IA"}). Presione 'Reintentar IA' para reanudar.`
+								: `Reintentando servicio de IA (${store.blockedAiService ?? "IA"})…`}
+						</span>
+					</div>
+					<button
+						type="button"
+						data-testid="teacher-banner-retry-btn"
+						onClick={retryService}
+						className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs cursor-pointer shadow"
+					>
+						Reintentar
+					</button>
+				</div>
+			)}
+
 			{/* Fila 1: Saltos de Estación (x4) */}
 			<div className="flex flex-col gap-2">
 				<div className="text-[11px] uppercase font-bold tracking-wider text-slate-400">
@@ -337,10 +367,18 @@ export function OperatorConsole({ repo }: OperatorConsoleProps = {}) {
 					type="button"
 					data-testid="retry-service-btn"
 					onClick={retryService}
-					className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-black border border-slate-700 cursor-pointer flex items-center gap-2 transition-all"
+					className={`px-4 py-2 rounded-xl text-xs font-black border cursor-pointer flex items-center gap-2 transition-all ${
+						store.isAiBlocked
+							? "bg-amber-400 hover:bg-amber-300 text-slate-950 border-amber-300 shadow-lg animate-pulse"
+							: "bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700"
+					}`}
 				>
 					<span>🔄 Reintentar IA</span>
-					<span className="text-[10px] text-slate-400 font-normal">
+					<span
+						className={`text-[10px] font-normal ${
+							store.isAiBlocked ? "text-slate-900" : "text-slate-400"
+						}`}
+					>
 						STT/LLM/TTS
 					</span>
 				</button>
