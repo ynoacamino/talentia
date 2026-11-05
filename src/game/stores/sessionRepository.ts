@@ -5,12 +5,17 @@
  */
 
 import { InMemoryEventLog } from "@/core/storage/eventLog.ts";
+import { seedDemoSessions } from "@/core/storage/seedSessions.ts";
 import { InMemorySessionRepository } from "@/core/storage/sessionRepo.ts";
 import type { ISessionRepository } from "@/shared/documents.ts";
 
-let defaultRepository: ISessionRepository = new InMemorySessionRepository(
-	new InMemoryEventLog(),
-);
+function createDefaultRepository(): ISessionRepository {
+	const repo = new InMemorySessionRepository(new InMemoryEventLog());
+	seedDemoSessions(repo);
+	return repo;
+}
+
+let defaultRepository: ISessionRepository = createDefaultRepository();
 
 /**
  * Returns the current active default session repository.

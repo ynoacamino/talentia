@@ -4,14 +4,16 @@
  * Alfabeto seguro sin confusables (0, O, 1, I, L).
  */
 import { useState } from "react";
+import type { ISessionRepository } from "@/shared/documents.ts";
 import { usePlayStore } from "@/ui/play/playStore.ts";
 import { SAFE_CODE_ALPHABET } from "@/ui/tokens/strings.ts";
 
-interface JoinScreenProps {
+export interface JoinScreenProps {
 	prefilledCode?: string | null;
+	repo?: ISessionRepository;
 }
 
-export function JoinScreen({ prefilledCode }: JoinScreenProps) {
+export function JoinScreen({ prefilledCode, repo }: JoinScreenProps) {
 	const { joinSession } = usePlayStore();
 	const [code, setCode] = useState(prefilledCode ?? "");
 	const [error, setError] = useState<string | null>(null);
@@ -42,7 +44,7 @@ export function JoinScreen({ prefilledCode }: JoinScreenProps) {
 				return;
 			}
 		}
-		joinSession(code);
+		joinSession(code, repo);
 	};
 
 	// Lista de caracteres para el teclado táctil
@@ -68,13 +70,17 @@ export function JoinScreen({ prefilledCode }: JoinScreenProps) {
 				</div>
 
 				{/* Cajas de Código de 4 caracteres */}
-				<div className="flex gap-3 justify-center my-2">
+				<div
+					data-testid="join-code-display"
+					className="flex gap-3 justify-center my-2"
+				>
 					{[0, 1, 2, 3].map((idx) => {
 						const char = code[idx] ?? "";
 						const isActive = code.length === idx;
 						return (
 							<div
 								key={idx}
+								data-testid={`code-box-${idx}`}
 								className={`w-14 h-16 rounded-2xl border-3 flex items-center justify-center text-3xl font-black transition-all ${
 									isActive
 										? "border-amber-400 bg-amber-400/10 shadow-[0_0_15px_rgba(251,191,36,0.3)] scale-105"
@@ -90,7 +96,10 @@ export function JoinScreen({ prefilledCode }: JoinScreenProps) {
 				</div>
 
 				{error && (
-					<div className="text-xs font-bold text-red-400 bg-red-950/60 px-4 py-2 rounded-xl border border-red-800 animate-shake">
+					<div
+						data-testid="join-error"
+						className="text-xs font-bold text-red-400 bg-red-950/60 px-4 py-2 rounded-xl border border-red-800 animate-shake"
+					>
 						{error}
 					</div>
 				)}
@@ -103,8 +112,9 @@ export function JoinScreen({ prefilledCode }: JoinScreenProps) {
 								<button
 									key={k}
 									type="button"
+									data-testid={`key-${k}`}
 									onClick={() => handleAddChar(k)}
-									className="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-amber-500 active:text-black active:scale-95 text-base font-bold text-slate-200 border border-slate-700 transition-transform"
+									className="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-amber-500 active:text-black active:scale-95 text-base font-bold text-slate-200 border border-slate-700 transition-transform cursor-pointer"
 								>
 									{k}
 								</button>
@@ -112,8 +122,9 @@ export function JoinScreen({ prefilledCode }: JoinScreenProps) {
 							{rIdx === keyRows.length - 1 && (
 								<button
 									type="button"
+									data-testid="key-backspace"
 									onClick={handleDelete}
-									className="px-3 py-2 rounded-xl bg-red-950/70 hover:bg-red-900 active:scale-95 text-xs font-bold text-red-300 border border-red-800"
+									className="px-3 py-2 rounded-xl bg-red-950/70 hover:bg-red-900 active:scale-95 text-xs font-bold text-red-300 border border-red-800 cursor-pointer"
 									title="Borrar carácter"
 								>
 									⌫
@@ -126,6 +137,7 @@ export function JoinScreen({ prefilledCode }: JoinScreenProps) {
 				{/* Botón de Entrada */}
 				<button
 					type="button"
+					data-testid="join-submit-btn"
 					onClick={() => handleSubmit()}
 					disabled={code.length !== 4}
 					className={`w-full py-4 rounded-2xl text-lg font-black tracking-wide shadow-xl transition-all ${

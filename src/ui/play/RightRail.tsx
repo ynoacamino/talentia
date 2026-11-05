@@ -16,16 +16,19 @@ import {
 } from "@/ui/tokens/colors.ts";
 import { LOCKED_STRINGS } from "@/ui/tokens/strings.ts";
 
-export function RightRail() {
-	const {
-		cards,
-		setCardStatus,
-		addSubtitle,
-		openDraw,
-		showShakeMessage,
-		isWalking,
-		isTimerPaused,
-	} = usePlayStore();
+export interface RightRailProps {
+	cards?: StudentCard[];
+}
+
+export function RightRail({ cards: propCards }: RightRailProps = {}) {
+	const store = usePlayStore();
+	const cards = propCards ?? store.cards;
+	const setCardStatus = store.setCardStatus;
+	const addSubtitle = store.addSubtitle;
+	const openDraw = store.openDraw;
+	const showShakeMessage = store.showShakeMessage;
+	const isWalking = store.isWalking;
+	const isTimerPaused = store.isTimerPaused;
 
 	const holdTimers = useRef<
 		Record<string, { start: number; timerId: NodeJS.Timeout | null }>

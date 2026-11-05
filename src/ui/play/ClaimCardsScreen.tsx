@@ -9,21 +9,36 @@
  */
 import { useEffect, useState } from "react";
 import { AvatarCutout } from "@/ui/components/AvatarCutout.tsx";
-import { type StudentCard, usePlayStore } from "@/ui/play/playStore.ts";
+import type { PlayPhase, StudentCard } from "@/ui/play/playStore.ts";
+import { usePlayStore } from "@/ui/play/playStore.ts";
 import { KID_AVATARS } from "@/ui/tokens/avatars.ts";
 
-export function ClaimCardsScreen() {
-	const {
-		cards,
-		selectedCardIndex,
-		selectCardForEdit,
-		updateCard,
-		toggleCardConfirmed,
-		phase,
-		countdownSeconds,
-		startActiveGame,
-		sessionCode,
-	} = usePlayStore();
+export interface ClaimCardsScreenProps {
+	cards?: StudentCard[];
+	phase?: PlayPhase;
+	countdownSeconds?: number;
+	sessionCode?: string | null;
+	selectedCardIndex?: number | null;
+}
+
+export function ClaimCardsScreen({
+	cards: propCards,
+	phase: propPhase,
+	countdownSeconds: propCountdown,
+	sessionCode: propCode,
+	selectedCardIndex: propSelectedIdx,
+}: ClaimCardsScreenProps = {}) {
+	const store = usePlayStore();
+	const cards = propCards ?? store.cards;
+	const phase = propPhase ?? store.phase;
+	const countdownSeconds = propCountdown ?? store.countdownSeconds;
+	const sessionCode = propCode ?? store.sessionCode;
+	const selectedCardIndex =
+		propSelectedIdx !== undefined ? propSelectedIdx : store.selectedCardIndex;
+	const selectCardForEdit = store.selectCardForEdit;
+	const updateCard = store.updateCard;
+	const toggleCardConfirmed = store.toggleCardConfirmed;
+	const startActiveGame = store.startActiveGame;
 
 	const [isListeningStt, setIsListeningStt] = useState(false);
 	const [nameInput, setNameInput] = useState("");
@@ -47,7 +62,7 @@ export function ClaimCardsScreen() {
 	const handleOpenCard = (idx: number) => {
 		const c = cards[idx];
 		if (!c || c.isConfirmed) return;
-		setNameInput(c.studentName);
+		setNameInput(c.studentName || "");
 		selectCardForEdit(idx);
 	};
 
@@ -59,34 +74,35 @@ export function ClaimCardsScreen() {
 
 	const handleSimulateStt = () => {
 		setIsListeningStt(true);
-		// Simula reconocimiento de voz tras 1.5s
-		setTimeout(() => {
-			const sampleNames = [
-				"Mateo",
-				"Valentina",
-				"Sofía",
-				"Leo",
-				"Camila",
-				"Lucas",
-				"Elena",
-				"Joaquín",
-			];
-			const randomName =
-				sampleNames[Math.floor(Math.random() * sampleNames.length)] ?? "Mateo";
-			setNameInput(randomName);
-			if (selectedCardIndex !== null) {
-				updateCard(selectedCardIndex, { studentName: randomName });
-			}
-			setIsListeningStt(false);
-		}, 1500);
+		// Simula reconocimiento de voz
+		const sampleNames = [
+			"Mateo",
+			"Valentina",
+			"Sofía",
+			"Leo",
+			"Camila",
+			"Lucas",
+			"Elena",
+			"Joaquín",
+		];
+		const randomName =
+			sampleNames[Math.floor(Math.random() * sampleNames.length)] ?? "Mateo";
+		setNameInput(randomName);
+		if (selectedCardIndex !== null) {
+			updateCard(selectedCardIndex, { studentName: randomName });
+		}
+		setIsListeningStt(false);
 	};
 
 	const handleConfirmCard = (idx: number) => {
 		const c = cards[idx];
 		if (!c) return;
-		if (nameInput.trim() && selectedCardIndex === idx) {
-			updateCard(idx, { studentName: nameInput.trim().slice(0, 10) });
-		}
+		const finalName = (
+			nameInput.trim() ||
+			c.studentName ||
+			`Jugador ${idx + 1}`
+		).slice(0, 10);
+		updateCard(idx, { studentName: finalName });
 		selectCardForEdit(null);
 		toggleCardConfirmed(idx);
 	};
@@ -106,9 +122,17 @@ export function ClaimCardsScreen() {
 				<div className="flex items-center gap-3">
 					<div className="px-3 py-1 rounded-xl bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300">
 						Sesión:{" "}
-						<span className="font-bold text-amber-400">{sessionCode}</span>
+						<span
+							data-testid="claim-session-code"
+							className="font-bold text-amber-400"
+						>
+							{sessionCode}
+						</span>
 					</div>
-					<div className="px-3 py-1 rounded-xl bg-emerald-950/80 border border-emerald-700 text-xs font-bold text-emerald-300">
+					<div
+						data-testid="claim-ready-count"
+						className="px-3 py-1 rounded-xl bg-emerald-950/80 border border-emerald-700 text-xs font-bold text-emerald-300"
+					>
 						{cards.filter((c) => c.isConfirmed).length}/{cards.length} Listos
 					</div>
 				</div>
@@ -121,6 +145,7 @@ export function ClaimCardsScreen() {
 					return (
 						<div
 							key={card.cardId}
+							data-testid={`claim-card-${idx}`}
 							className={`relative flex flex-col items-center justify-between p-5 rounded-3xl border-3 transition-all ${
 								card.isConfirmed
 									? "border-emerald-500 bg-emerald-950/20 shadow-[0_0_20px_rgba(16,185,129,0.2)]"
@@ -137,6 +162,7 @@ export function ClaimCardsScreen() {
 								{card.isConfirmed ? (
 									<button
 										type="button"
+										data-testid={`unconfirm-card-btn-${idx}`}
 										onClick={(e) => {
 											e.stopPropagation();
 											toggleCardConfirmed(idx);
@@ -147,14 +173,17 @@ export function ClaimCardsScreen() {
 										✓
 									</button>
 								) : (
-									<span className="w-6 h-6 rounded-full border border-slate-600 bg-slate-800 text-slate-400 text-xs flex items-center justify-center">
+									<span
+										data-testid={`question-badge-${idx}`}
+										className="w-6 h-6 rounded-full border border-slate-600 bg-slate-800 text-slate-400 text-xs flex items-center justify-center font-bold"
+									>
 										?
 									</span>
 								)}
 							</div>
 
 							{/* Avatar Paper-Mario Cutout */}
-							<div className="my-3">
+							<div className="my-3" data-testid={`card-avatar-${idx}`}>
 								<AvatarCutout
 									avatarId={card.avatarId}
 									size="lg"
@@ -164,7 +193,10 @@ export function ClaimCardsScreen() {
 
 							{/* Nombre del Alumno (10-char max SPEC §3) */}
 							<div className="w-full text-center mt-2">
-								<div className="text-lg font-black truncate max-w-[140px] mx-auto text-white">
+								<div
+									data-testid={`card-name-${idx}`}
+									className="text-lg font-black truncate max-w-[140px] mx-auto text-white"
+								>
 									{card.studentName || `Jugador ${idx + 1}`}
 								</div>
 								<div className="text-[11px] font-semibold text-slate-400 capitalize mt-0.5">
@@ -177,6 +209,7 @@ export function ClaimCardsScreen() {
 								<div className="mt-4 flex flex-col gap-2 w-full">
 									<button
 										type="button"
+										data-testid={`edit-card-btn-${idx}`}
 										onClick={() => handleOpenCard(idx)}
 										className="w-full py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs tracking-wide shadow-sm active:scale-95 cursor-pointer"
 									>
@@ -184,6 +217,7 @@ export function ClaimCardsScreen() {
 									</button>
 									<button
 										type="button"
+										data-testid={`confirm-card-btn-${idx}`}
 										onClick={() => handleConfirmCard(idx)}
 										className="w-full py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-sm tracking-wide shadow-md active:scale-95 cursor-pointer"
 									>
@@ -192,7 +226,10 @@ export function ClaimCardsScreen() {
 								</div>
 							)}
 							{card.isConfirmed && (
-								<div className="mt-4 text-xs font-bold text-emerald-400 flex items-center gap-1">
+								<div
+									data-testid={`card-ready-status-${idx}`}
+									className="mt-4 text-xs font-bold text-emerald-400 flex items-center gap-1"
+								>
 									<span>¡Listo para jugar!</span>
 								</div>
 							)}
@@ -203,7 +240,10 @@ export function ClaimCardsScreen() {
 
 			{/* Modal / Panel de Edición de Tarjeta seleccionada */}
 			{selectedCard && !selectedCard.isConfirmed && (
-				<div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-pop">
+				<div
+					data-testid="customize-modal"
+					className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-pop"
+				>
 					<div className="max-w-xl w-full bg-slate-900 border-2 border-slate-700 rounded-3xl p-6 shadow-2xl flex flex-col gap-6">
 						<div className="flex items-center justify-between border-b border-slate-800 pb-3">
 							<h3 className="text-xl font-black text-white">
@@ -211,6 +251,7 @@ export function ClaimCardsScreen() {
 							</h3>
 							<button
 								type="button"
+								data-testid="close-modal-btn"
 								onClick={() => selectCardForEdit(null)}
 								className="text-slate-400 hover:text-white text-lg font-bold p-1 cursor-pointer"
 							>
@@ -233,6 +274,7 @@ export function ClaimCardsScreen() {
 										<button
 											key={av.id}
 											type="button"
+											data-testid={`avatar-option-${av.id}`}
 											onClick={() => handleSelectAvatar(av.id)}
 											className={`relative p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
 												isSelected
@@ -268,6 +310,7 @@ export function ClaimCardsScreen() {
 								<input
 									type="text"
 									maxLength={10}
+									data-testid="student-name-input"
 									value={nameInput}
 									onChange={(e) => setNameInput(e.target.value.slice(0, 10))}
 									placeholder="Escribe tu nombre..."
@@ -275,6 +318,7 @@ export function ClaimCardsScreen() {
 								/>
 								<button
 									type="button"
+									data-testid="stt-simulate-btn"
 									onClick={handleSimulateStt}
 									disabled={isListeningStt}
 									className={`px-4 py-3 rounded-xl font-bold text-sm flex items-center gap-2 border transition-all cursor-pointer ${
@@ -293,6 +337,7 @@ export function ClaimCardsScreen() {
 						<div className="flex gap-3 justify-end pt-2 border-t border-slate-800">
 							<button
 								type="button"
+								data-testid="cancel-edit-btn"
 								onClick={() => selectCardForEdit(null)}
 								className="px-5 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-bold hover:bg-slate-700 cursor-pointer"
 							>
@@ -300,6 +345,7 @@ export function ClaimCardsScreen() {
 							</button>
 							<button
 								type="button"
+								data-testid="save-confirm-btn"
 								onClick={() =>
 									selectedCardIndex !== null &&
 									handleConfirmCard(selectedCardIndex)
@@ -313,17 +359,23 @@ export function ClaimCardsScreen() {
 				</div>
 			)}
 
-			{/* Overlay de Auto-Countdown de 5s (SPEC §3) */}
+			{/* Overlay de Auto-Countdown de 5s o Force-Start de 3s (SPEC §3) */}
 			{phase === "countdown" && (
-				<div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center z-50 animate-pop select-none">
+				<div
+					data-testid="countdown-overlay"
+					className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex flex-col items-center justify-center z-50 animate-pop select-none"
+				>
 					<div className="text-center p-8 rounded-3xl bg-slate-900 border-3 border-amber-400 shadow-2xl max-w-md w-full">
 						<div className="text-amber-400 text-xs font-black uppercase tracking-widest mb-2">
-							¡Todos los integrantes confirmaron!
+							¡Preparados para iniciar!
 						</div>
 						<h3 className="text-3xl font-black text-white mb-6">
 							Iniciando misión en…
 						</h3>
-						<div className="w-28 h-28 mx-auto rounded-full border-4 border-amber-400 bg-amber-400/20 flex items-center justify-center text-6xl font-black text-amber-300 animate-pop shadow-[0_0_30px_rgba(251,191,36,0.4)]">
+						<div
+							data-testid="countdown-seconds"
+							className="w-28 h-28 mx-auto rounded-full border-4 border-amber-400 bg-amber-400/20 flex items-center justify-center text-6xl font-black text-amber-300 animate-pop shadow-[0_0_30px_rgba(251,191,36,0.4)]"
+						>
 							{countdownSeconds}
 						</div>
 						<p className="text-sm text-slate-300 mt-6">

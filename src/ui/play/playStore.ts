@@ -3,6 +3,16 @@
  * Conforme a SPEC §2, §3, §5, §6, §7, §12
  */
 import { create } from "zustand";
+import {
+	createSessionSyncBus,
+	type SessionSyncBus,
+	type SyncMessage,
+} from "@/core/sync/sessionSync.ts";
+import { getDefaultSessionRepository } from "@/game/stores/sessionRepository.ts";
+import type {
+	ISessionRepository,
+	ISyncSessionRepository,
+} from "@/shared/documents.ts";
 import { KID_AVATARS } from "@/ui/tokens/avatars.ts";
 import type { PlayerCardStatus } from "@/ui/tokens/colors.ts";
 
@@ -96,6 +106,7 @@ export interface PlayState {
 	cards: StudentCard[];
 	selectedCardIndex: number | null;
 	countdownSeconds: number;
+	syncBus: SessionSyncBus | null;
 
 	// Estado en partida activa
 	currentStation: StationId;
@@ -119,6 +130,7 @@ export interface PlayState {
 	drawCardId: string | null;
 	drawTimeRemaining: number;
 	drawCapHit: boolean;
+	drawCapHitCardId?: string;
 
 	isMapOpen: boolean;
 	proposedStation: StationId | null;
@@ -135,7 +147,10 @@ export interface PlayState {
 
 	// Acciones
 	setSessionCode: (code: string) => void;
-	joinSession: (code: string, playersCount?: number) => void;
+	joinSession: (
+		code: string,
+		repoOrPlayersCount?: ISessionRepository | ISyncSessionRepository | number,
+	) => void;
 	selectCardForEdit: (index: number | null) => void;
 	updateCard: (index: number, updates: Partial<StudentCard>) => void;
 	toggleCardConfirmed: (index: number) => void;
@@ -221,6 +236,7 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 	cards: INITIAL_CARDS,
 	selectedCardIndex: null,
 	countdownSeconds: 5,
+	syncBus: null,
 
 	currentStation: "campamento",
 	gameTimeSeconds: 300, // 5:00
@@ -262,7 +278,36 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 
 	setSessionCode: (code) => set({ sessionCode: code.toUpperCase() }),
 
-	joinSession: (code, playersCount = 4) => {
+	joinSession: (code, repoOrPlayersCount) => {
+		const canonicalCode = code.trim().toUpperCase();
+		let playersCount = 4;
+		let targetRepo: ISessionRepository | ISyncSessionRepository | undefined;
+
+		if (typeof repoOrPlayersCount === "number") {
+			playersCount = repoOrPlayersCount;
+		} else if (repoOrPlayersCount) {
+			targetRepo = repoOrPlayersCount;
+		} else {
+			targetRepo = getDefaultSessionRepository();
+		}
+
+		if (
+			targetRepo &&
+			"getByCodeSync" in targetRepo &&
+			typeof targetRepo.getByCodeSync === "function"
+		) {
+			const rec = targetRepo.getByCodeSync(canonicalCode);
+			if (rec) {
+				playersCount = rec.config.expectedPlayers;
+			}
+		}
+
+		if (get().syncBus) {
+			get().syncBus?.close();
+		}
+
+		const bus = createSessionSyncBus(canonicalCode);
+
 		const newCards: StudentCard[] = [];
 		for (let i = 0; i < playersCount; i++) {
 			const avatar = KID_AVATARS[i % KID_AVATARS.length];
@@ -270,7 +315,7 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 				cardId: `card-${i + 1}`,
 				playerIndex: i,
 				avatarId: avatar?.id ?? "zorro",
-				studentName: `Jugador ${i + 1}`,
+				studentName: "",
 				isConfirmed: false,
 				status: "idle",
 				isRetired: false,
@@ -278,13 +323,120 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 				drawsCount: 0,
 			});
 		}
+
+		bus.subscribe((msg: SyncMessage) => {
+			if (msg.type === "CARD_UPDATED") {
+				set((state) => {
+					const cards = [...state.cards];
+					const existing = cards[msg.slotIndex];
+					if (existing) {
+						cards[msg.slotIndex] = {
+							...existing,
+							...msg.card,
+							status: (msg.card.status as PlayerCardStatus) || existing.status,
+						};
+					}
+					return { cards };
+				});
+			} else if (msg.type === "CARD_CONFIRMED") {
+				set((state) => {
+					const cards = [...state.cards];
+					const existing = cards[msg.slotIndex];
+					if (existing) {
+						cards[msg.slotIndex] = {
+							...existing,
+							avatarId: msg.avatarId || existing.avatarId,
+							studentName: msg.studentName || existing.studentName,
+							isConfirmed: msg.confirmed,
+						};
+					}
+					const allConfirmed =
+						cards.length > 0 && cards.every((c) => c.isConfirmed);
+					if (allConfirmed) {
+						return { cards, phase: "countdown", countdownSeconds: 5 };
+					}
+					return { cards };
+				});
+			} else if (msg.type === "COUNTDOWN_START") {
+				set({ phase: "countdown", countdownSeconds: msg.seconds });
+			} else if (msg.type === "COUNTDOWN_CANCEL") {
+				set((state) => {
+					const cards = [...state.cards];
+					const existing = cards[msg.slotIndex];
+					if (existing) {
+						cards[msg.slotIndex] = {
+							...existing,
+							isConfirmed: false,
+						};
+					}
+					return { phase: "claim", cards, countdownSeconds: 5 };
+				});
+			} else if (msg.type === "COUNTDOWN_TICK") {
+				set({ countdownSeconds: msg.seconds });
+			} else if (msg.type === "FORCE_START") {
+				set((state) => {
+					const remainingCards = state.cards.filter((c) => c.isConfirmed);
+					return {
+						phase: "countdown",
+						countdownSeconds: msg.seconds,
+						cards: remainingCards,
+						expectedPlayers: msg.confirmedCount,
+					};
+				});
+			} else if (msg.type === "GAME_START") {
+				get().startActiveGame();
+			} else if (msg.type === "RETIRE_STUDENT") {
+				set((state) => {
+					const cards = state.cards.map((c, idx) =>
+						c.cardId === msg.studentId || idx === msg.slotIndex
+							? { ...c, isRetired: true, status: "idle" as PlayerCardStatus }
+							: c,
+					);
+					return { cards };
+				});
+			}
+		});
+
 		set({
 			phase: "claim",
-			sessionCode: code.toUpperCase(),
+			sessionCode: canonicalCode,
 			expectedPlayers: playersCount,
 			cards: newCards,
 			selectedCardIndex: null,
+			syncBus: bus,
 		});
+
+		bus.send({ type: "SESSION_JOINED", sender: "play", code: canonicalCode });
+
+		if (targetRepo && !("getByCodeSync" in targetRepo)) {
+			targetRepo
+				.getByCode(canonicalCode)
+				.then((rec) => {
+					if (rec && rec.config.expectedPlayers !== playersCount) {
+						const updatedCount = rec.config.expectedPlayers;
+						const updatedCards: StudentCard[] = [];
+						for (let i = 0; i < updatedCount; i++) {
+							const avatar = KID_AVATARS[i % KID_AVATARS.length];
+							updatedCards.push({
+								cardId: `card-${i + 1}`,
+								playerIndex: i,
+								avatarId: avatar?.id ?? "zorro",
+								studentName: "",
+								isConfirmed: false,
+								status: "idle",
+								isRetired: false,
+								turnsCount: 0,
+								drawsCount: 0,
+							});
+						}
+						set({
+							expectedPlayers: updatedCount,
+							cards: updatedCards,
+						});
+					}
+				})
+				.catch(() => {});
+		}
 	},
 
 	selectCardForEdit: (index) => set({ selectedCardIndex: index }),
@@ -293,8 +445,17 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 		const cards = [...get().cards];
 		const current = cards[index];
 		if (current) {
-			cards[index] = { ...current, ...updates };
+			const safeUpdates = { ...updates };
+			if (safeUpdates.studentName !== undefined) {
+				safeUpdates.studentName = safeUpdates.studentName.slice(0, 10);
+			}
+			cards[index] = { ...current, ...safeUpdates };
 			set({ cards });
+			get().syncBus?.send({
+				type: "CARD_UPDATED",
+				slotIndex: index,
+				card: safeUpdates,
+			});
 		}
 	},
 
@@ -302,17 +463,39 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 		const cards = [...get().cards];
 		const current = cards[index];
 		if (current) {
-			cards[index] = { ...current, isConfirmed: !current.isConfirmed };
-			set({ cards });
+			const nextConfirmed = !current.isConfirmed;
+			cards[index] = { ...current, isConfirmed: nextConfirmed };
 
-			// Si todas las tarjetas están confirmadas -> iniciar auto-countdown de 5s
-			const allConfirmed = cards.every((c) => c.isConfirmed);
-			if (allConfirmed) {
-				get().startCountdown();
+			get().syncBus?.send({
+				type: "CARD_CONFIRMED",
+				slotIndex: index,
+				avatarId: current.avatarId,
+				studentName: current.studentName,
+				confirmed: nextConfirmed,
+			});
+
+			if (nextConfirmed) {
+				const allConfirmed =
+					cards.length > 0 && cards.every((c) => c.isConfirmed);
+				if (allConfirmed) {
+					set({ cards, phase: "countdown", countdownSeconds: 5 });
+					get().syncBus?.send({
+						type: "COUNTDOWN_START",
+						seconds: 5,
+						reason: "all_ready",
+					});
+				} else {
+					set({ cards });
+				}
 			} else {
-				// Si alguien desconfirma durante cuenta regresiva -> cancela
 				if (get().phase === "countdown") {
-					get().cancelCountdown();
+					set({ cards, phase: "claim", countdownSeconds: 5 });
+					get().syncBus?.send({
+						type: "COUNTDOWN_CANCEL",
+						slotIndex: index,
+					});
+				} else {
+					set({ cards });
 				}
 			}
 		}
@@ -327,6 +510,10 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 	},
 
 	startActiveGame: () => {
+		get().syncBus?.send({
+			type: "GAME_START",
+			phase: "playing",
+		});
 		set({
 			phase: "active",
 			gameTimeSeconds: 300,
@@ -478,8 +665,16 @@ export const usePlayStore = create<PlayState>((set, get) => ({
 	},
 
 	resetToLobby: () => {
+		if (get().syncBus) {
+			get().syncBus?.close();
+		}
 		set({
-			phase: "claim",
+			phase: "join",
+			sessionCode: null,
+			cards: [],
+			selectedCardIndex: null,
+			syncBus: null,
+			countdownSeconds: 5,
 			endType: null,
 			checklistStep: 0,
 			inventory: { madera: false, plano: false, sello: false },

@@ -5,13 +5,18 @@
  * - Control de silenciamiento de música de fondo (Mute BGM) exclusivo aquí.
  * - Pestañas de navegación: Nueva Sesión, Espejo en Vivo, Vista Docente, Sesiones Pasadas.
  */
+import type { ISessionRepository } from "@/shared/documents.ts";
 import { DocenteView } from "@/ui/teacher/DocenteView.tsx";
 import { LiveMirror } from "@/ui/teacher/LiveMirror.tsx";
 import { NewSessionForm } from "@/ui/teacher/NewSessionForm.tsx";
 import { PastSessionsList } from "@/ui/teacher/PastSessionsList.tsx";
 import { useTeacherStore } from "@/ui/teacher/teacherStore.ts";
 
-export function TeacherLayout() {
+export interface TeacherLayoutProps {
+	repo?: ISessionRepository;
+}
+
+export function TeacherLayout({ repo }: TeacherLayoutProps = {}) {
 	const {
 		activeTab,
 		setActiveTab,
@@ -91,10 +96,10 @@ export function TeacherLayout() {
 
 			{/* Contenedor Principal Scrollable */}
 			<main className="flex-1 overflow-y-auto">
-				{activeTab === "form" && <NewSessionForm />}
-				{activeTab === "live" && <LiveMirror />}
-				{activeTab === "docente" && <DocenteView />}
-				{activeTab === "past" && <PastSessionsList />}
+				{activeTab === "form" && <NewSessionForm repo={repo} />}
+				{activeTab === "live" && <LiveMirror repo={repo} />}
+				{activeTab === "docente" && <DocenteView repo={repo} />}
+				{activeTab === "past" && <PastSessionsList repo={repo} />}
 			</main>
 		</div>
 	);

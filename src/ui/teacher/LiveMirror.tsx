@@ -11,23 +11,57 @@
  * - Consola de operador silenciosa integrada.
  */
 
+import { useState } from "react";
+import type { ISessionRepository } from "@/shared/documents.ts";
 import { STATIONS, type StationId } from "@/ui/play/playStore.ts";
 import { OperatorConsole } from "@/ui/teacher/OperatorConsole.tsx";
-import { useTeacherStore } from "@/ui/teacher/teacherStore.ts";
+import {
+	type StudentEvaluation,
+	useTeacherStore,
+} from "@/ui/teacher/teacherStore.ts";
 import { getAvatarById } from "@/ui/tokens/avatars.ts";
 
-export function LiveMirror() {
-	const {
-		liveStep,
-		liveStation,
-		liveTimerSeconds,
-		stallCountdownSeconds,
-		wallClockMs,
-		recentTranscripts,
-		recentEvents,
-		studentEvals,
-		activeSessionCode,
-	} = useTeacherStore();
+export interface LiveMirrorProps {
+	repo?: ISessionRepository;
+	studentEvals?: StudentEvaluation[];
+	activeSessionCode?: string;
+	isCountingDown?: boolean;
+	countdownSeconds?: number;
+	liveTimerSeconds?: number;
+}
+
+export function LiveMirror({
+	repo,
+	studentEvals: propEvals,
+	activeSessionCode: propCode,
+	isCountingDown: propCountingDown,
+	countdownSeconds: propCountdown,
+	liveTimerSeconds: propTimer,
+}: LiveMirrorProps = {}) {
+	const store = useTeacherStore();
+	const liveStep = store.liveStep;
+	const liveStation = store.liveStation;
+	const liveTimerSeconds = propTimer ?? store.liveTimerSeconds;
+	const stallCountdownSeconds = store.stallCountdownSeconds;
+	const wallClockMs = store.wallClockMs;
+	const recentTranscripts = store.recentTranscripts;
+	const recentEvents = store.recentEvents;
+	const studentEvals = propEvals ?? store.studentEvals;
+	const activeSessionCode = propCode ?? store.activeSessionCode;
+	const countdownSeconds = propCountdown ?? store.countdownSeconds;
+	const isCountingDown = propCountingDown ?? store.isCountingDown;
+	const forceStart = store.forceStart;
+	const retireStudent = store.retireStudent;
+
+	const [retiringStudentId, setRetiringStudentId] = useState<string | null>(
+		null,
+	);
+
+	const confirmedCount = studentEvals.filter(
+		(s) => s.confirmed && !s.retired,
+	).length;
+	const totalExpected = studentEvals.length;
+	const canForceStart = confirmedCount >= 2 && confirmedCount < totalExpected;
 
 	const formatTimer = (secs: number) => {
 		const m = Math.floor(secs / 60);
@@ -54,6 +88,34 @@ export function LiveMirror() {
 						(3D solo lectura)
 					</span>
 				</div>
+
+				{/* Botón de Force-Start si hay ≥2 confirmados y < N (§3) */}
+				{canForceStart && (
+					<button
+						type="button"
+						data-testid="force-start-btn"
+						onClick={() => forceStart(repo)}
+						className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shadow-lg cursor-pointer transition-all flex items-center gap-2 animate-bounce"
+					>
+						<span>{`🚀 Iniciar con ${confirmedCount} listos`}</span>
+					</button>
+				)}
+
+				{/* Cuenta regresiva de inicio visible en /teacher (§3) */}
+				{isCountingDown && (
+					<div
+						data-testid="teacher-countdown"
+						className="px-4 py-2 rounded-xl bg-amber-950/90 border-2 border-amber-500 text-amber-200 text-xs font-black flex items-center gap-2 animate-pulse"
+					>
+						<span>⏳ Iniciando misión en</span>
+						<span
+							data-testid="teacher-countdown-seconds"
+							className="text-base font-mono font-black text-amber-300"
+						>
+							{countdownSeconds}s
+						</span>
+					</div>
+				)}
 
 				{/* Métricas de Tiempo / Stall / Reloj de Pared */}
 				<div className="flex items-center gap-4 text-xs font-mono">
@@ -166,34 +228,93 @@ export function LiveMirror() {
 						{studentEvals.map((s) => (
 							<div
 								key={s.studentId}
-								className={`flex items-center justify-between p-2.5 rounded-xl border ${
+								data-testid={`mirror-student-${s.studentId}`}
+								className={`flex flex-col gap-2 p-2.5 rounded-xl border ${
 									s.retired
-										? "bg-red-950/20 border-red-900/40 opacity-50"
+										? "bg-red-950/20 border-red-900/40 opacity-50 grayscale"
 										: "bg-slate-800/60 border-slate-700/80"
 								}`}
 							>
-								<div className="flex items-center gap-2.5">
-									<span className="text-lg">
-										{getAvatarById(s.avatarId).emoji}
-									</span>
-									<div>
-										<div className="text-xs font-black text-white leading-tight">
-											{s.studentName}
+								<div className="flex items-center justify-between">
+									<div className="flex items-center gap-2.5">
+										<span className="text-lg">
+											{getAvatarById(s.avatarId).emoji}
+										</span>
+										<div>
+											<div className="text-xs font-black text-white leading-tight">
+												{s.studentName}
+											</div>
+											<div className="text-[10px] text-slate-400 font-mono">
+												{s.voiceTurns} turnos / {s.drawsCount} dibujos
+											</div>
 										</div>
-										<div className="text-[10px] text-slate-400 font-mono">
-											{s.voiceTurns} turnos / {s.drawsCount} dibujos
-										</div>
+									</div>
+
+									<div className="flex items-center gap-2">
+										{s.retired ? (
+											<span
+												data-testid="retired-badge"
+												className="text-[9px] font-bold text-red-400 bg-red-950 px-1.5 py-0.5 rounded border border-red-800"
+											>
+												{`Retirado ${s.retiredAt}`}
+											</span>
+										) : (
+											<>
+												<span
+													data-testid={`mirror-status-${s.studentId}`}
+													className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+														s.confirmed
+															? "text-emerald-400 bg-emerald-950 border-emerald-800"
+															: "text-amber-300 bg-amber-950/80 border-amber-800"
+													}`}
+												>
+													{s.confirmed ? "Listo ✓" : "Esperando"}
+												</span>
+												<button
+													type="button"
+													data-testid={`inline-retire-btn-${s.studentId}`}
+													onClick={() => setRetiringStudentId(s.studentId)}
+													className="text-[10px] font-bold text-red-400 hover:text-red-300 px-1.5 py-0.5 rounded bg-red-950/60 border border-red-800/80 cursor-pointer"
+													title="Retirar alumno de la sesión"
+												>
+													Retirar
+												</button>
+											</>
+										)}
 									</div>
 								</div>
 
-								{s.retired ? (
-									<span className="text-[9px] font-bold text-red-400 bg-red-950 px-1.5 py-0.5 rounded border border-red-800">
-										Retirado {s.retiredAt}
-									</span>
-								) : (
-									<span className="text-[9px] font-bold text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded border border-emerald-800">
-										Activo
-									</span>
+								{/* Inline Confirmación de Retiro (§3, §13) */}
+								{retiringStudentId === s.studentId && !s.retired && (
+									<div
+										data-testid={`inline-retire-confirm-${s.studentId}`}
+										className="p-2 rounded-lg bg-red-950/80 border border-red-700 flex items-center justify-between gap-2 mt-1"
+									>
+										<span className="text-[10px] text-red-200 font-bold">
+											¿Retirar a {s.studentName}?
+										</span>
+										<div className="flex items-center gap-1.5">
+											<button
+												type="button"
+												data-testid={`confirm-inline-retire-${s.studentId}`}
+												onClick={() => {
+													retireStudent(s.studentId, repo);
+													setRetiringStudentId(null);
+												}}
+												className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white font-bold text-[10px] cursor-pointer"
+											>
+												Sí, retirar
+											</button>
+											<button
+												type="button"
+												data-testid={`cancel-inline-retire-${s.studentId}`}
+												onClick={() => setRetiringStudentId(null)}
+												className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] cursor-pointer"
+											>
+												No
+											</button>
+										</div>
+									</div>
 								)}
 							</div>
 						))}

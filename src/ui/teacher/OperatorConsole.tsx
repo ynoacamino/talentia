@@ -11,9 +11,14 @@
  * - Reintentar llamada IA bloqueada.
  */
 import { useState } from "react";
+import type { ISessionRepository } from "@/shared/documents.ts";
 import { useTeacherStore } from "@/ui/teacher/teacherStore.ts";
 
-export function OperatorConsole() {
+export interface OperatorConsoleProps {
+	repo?: ISessionRepository;
+}
+
+export function OperatorConsole({ repo }: OperatorConsoleProps = {}) {
 	const {
 		skipToStation,
 		forceGrantNext,
@@ -141,6 +146,7 @@ export function OperatorConsole() {
 						Retirar alumno:
 					</span>
 					<select
+						data-testid="retire-student-select"
 						value={studentToRetire ?? ""}
 						onChange={(e) => setStudentToRetire(e.target.value || null)}
 						className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200 outline-none"
@@ -154,23 +160,46 @@ export function OperatorConsole() {
 								</option>
 							))}
 					</select>
-					<button
-						type="button"
-						disabled={!studentToRetire}
-						onClick={() => {
-							if (studentToRetire) {
-								retireStudent(studentToRetire);
-								setStudentToRetire(null);
-							}
-						}}
-						className={`px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer ${
-							studentToRetire
-								? "bg-red-600 hover:bg-red-500 text-white border-red-500"
-								: "bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed"
-						}`}
-					>
-						Confirmar retiro
-					</button>
+
+					{studentToRetire && (
+						<div
+							data-testid="retire-inline-confirm"
+							className="flex items-center gap-2 bg-red-950/80 px-3 py-1.5 rounded-xl border border-red-700 animate-pop"
+						>
+							<span className="text-xs text-red-200 font-bold">
+								¿Confirmar retiro?
+							</span>
+							<button
+								type="button"
+								data-testid="confirm-retire-btn"
+								onClick={() => {
+									retireStudent(studentToRetire, repo);
+									setStudentToRetire(null);
+								}}
+								className="px-2.5 py-1 rounded-lg text-xs font-black bg-red-600 hover:bg-red-500 text-white cursor-pointer shadow"
+							>
+								Sí, retirar
+							</button>
+							<button
+								type="button"
+								data-testid="cancel-retire-btn"
+								onClick={() => setStudentToRetire(null)}
+								className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+							>
+								Cancelar
+							</button>
+						</div>
+					)}
+
+					{!studentToRetire && (
+						<button
+							type="button"
+							disabled={true}
+							className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed"
+						>
+							Retirar
+						</button>
+					)}
 				</div>
 
 				{/* Botón Reintentar IA */}

@@ -3,13 +3,24 @@
  * Conforme a SPEC §2, §11, §13, §17
  */
 import { create } from "zustand";
+import {
+	createSessionSyncBus,
+	type SessionSyncBus,
+	type SyncMessage,
+} from "@/core/sync/sessionSync.ts";
+import { getDefaultSessionRepository } from "@/game/stores/sessionRepository.ts";
 import { codeGen } from "@/shared/codeGen.ts";
 import type {
 	CriterionScore,
+	ISessionRepository,
+	ISyncSessionRepository,
 	Language,
+	PlayerCard,
+	SessionConfig,
 	StarRating,
 } from "@/shared/documents.ts";
 import { starsFor } from "@/shared/scoring.ts";
+import { KID_AVATARS } from "@/ui/tokens/avatars.ts";
 import type { GroupScores } from "@/ui/tokens/badges.ts";
 
 export type SessionLanguage = Language;
@@ -18,6 +29,7 @@ export interface StudentEvaluation {
 	studentId: string;
 	studentName: string;
 	avatarId: string;
+	confirmed?: boolean;
 	participacion: CriterionScore; // 0..2
 	propuesta: CriterionScore; // 0..2
 	organizacion: CriterionScore; // 0..2
@@ -53,10 +65,15 @@ export interface TeacherState {
 	formPlayers: number;
 	formDurationMinutes: number;
 	isConfigLocked: boolean;
+	configError: string | null;
+	configShake: boolean;
 
 	// Sesión activa
 	activeSessionCode: string;
 	activeTab: "form" | "live" | "docente" | "past";
+	syncBus: SessionSyncBus | null;
+	countdownSeconds: number;
+	isCountingDown: boolean;
 
 	// Audio mute exclusivo de teacher (§13)
 	isBgmMuted: boolean;
@@ -106,7 +123,12 @@ export interface TeacherState {
 	setFormLanguage: (lang: SessionLanguage) => void;
 	setFormPlayers: (players: number) => void;
 	setFormDurationMinutes: (minutes: number) => void;
-	createNewSession: () => string;
+	createNewSession: (
+		repo?: ISessionRepository | ISyncSessionRepository,
+	) => string;
+	forceStart: (
+		repo?: ISessionRepository | ISyncSessionRepository,
+	) => Promise<boolean>;
 	setActiveTab: (tab: TeacherState["activeTab"]) => void;
 	toggleBgmMute: () => void;
 
@@ -116,7 +138,10 @@ export interface TeacherState {
 	replayLastNpcLine: () => void;
 	endRunNow: () => void;
 	skipIntro: () => void;
-	retireStudent: (studentId: string) => void;
+	retireStudent: (
+		studentId: string,
+		repo?: ISessionRepository | ISyncSessionRepository,
+	) => void;
 	retryService: () => void;
 
 	// Acciones de Comentarios (Add-Only §11, §13, D5)
@@ -279,9 +304,14 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 	formPlayers: 4,
 	formDurationMinutes: 5,
 	isConfigLocked: false,
+	configError: null,
+	configShake: false,
 
 	activeSessionCode: "K7NP",
 	activeTab: "live",
+	syncBus: null,
+	countdownSeconds: 0,
+	isCountingDown: false,
 
 	isBgmMuted: false,
 
@@ -334,32 +364,304 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 	selectedPastSessionCode: null,
 
 	setFormLanguage: (lang) => {
-		if (get().isConfigLocked) return;
-		set({ formLanguage: lang });
+		if (get().isConfigLocked) {
+			set({
+				configError: "Configuración congelada: la partida ya ha iniciado",
+				configShake: true,
+			});
+			throw new Error(
+				"Configuration is locked: cannot mutate session configuration post-start",
+			);
+		}
+		set({ formLanguage: lang, configError: null, configShake: false });
 	},
 
 	setFormPlayers: (players) => {
-		if (get().isConfigLocked) return;
-		set({ formPlayers: Math.max(3, Math.min(6, players)) });
+		if (get().isConfigLocked) {
+			set({
+				configError: "Configuración congelada: la partida ya ha iniciado",
+				configShake: true,
+			});
+			throw new Error(
+				"Configuration is locked: cannot mutate session configuration post-start",
+			);
+		}
+		const valid = Math.max(3, Math.min(6, Math.floor(players)));
+		set({ formPlayers: valid, configError: null, configShake: false });
 	},
 
 	setFormDurationMinutes: (minutes) => {
-		if (get().isConfigLocked) return;
-		set({ formDurationMinutes: Math.max(5, Math.min(40, minutes)) });
+		if (get().isConfigLocked) {
+			set({
+				configError: "Configuración congelada: la partida ya ha iniciado",
+				configShake: true,
+			});
+			throw new Error(
+				"Configuration is locked: cannot mutate session configuration post-start",
+			);
+		}
+		const valid = Math.max(5, Math.min(40, minutes));
+		set({ formDurationMinutes: valid, configError: null, configShake: false });
 	},
 
-	createNewSession: () => {
-		const newCode = codeGen();
+	createNewSession: (repo?: ISessionRepository) => {
+		const targetRepo = repo ?? getDefaultSessionRepository();
+		const current = get();
+
+		if (!["ES", "EN", "QUZ"].includes(current.formLanguage)) {
+			throw new Error(
+				`Invalid language "${current.formLanguage}": must be ES, EN, or QUZ`,
+			);
+		}
+		if (
+			!Number.isInteger(current.formPlayers) ||
+			current.formPlayers < 3 ||
+			current.formPlayers > 6
+		) {
+			throw new Error(
+				`Invalid expectedPlayers ${current.formPlayers}: must be an integer between 3 and 6`,
+			);
+		}
+		if (
+			!Number.isInteger(current.formDurationMinutes) ||
+			current.formDurationMinutes < 5 ||
+			current.formDurationMinutes > 40 ||
+			current.formDurationMinutes % 5 !== 0
+		) {
+			throw new Error(
+				`Invalid durationMinutes ${current.formDurationMinutes}: must be between 5 and 40 in steps of 5`,
+			);
+		}
+
+		if (current.syncBus) {
+			current.syncBus.close();
+		}
+
+		const config: SessionConfig = {
+			language: current.formLanguage,
+			expectedPlayers: current.formPlayers,
+			durationMinutes: current.formDurationMinutes,
+			durationGameMs: current.formDurationMinutes * 60 * 1000,
+			createdAtWallMs: Date.now(),
+			locked: false,
+		};
+
+		let newCode = "";
+		if (
+			targetRepo &&
+			"createSync" in targetRepo &&
+			typeof targetRepo.createSync === "function"
+		) {
+			const record = targetRepo.createSync(config);
+			newCode = record.code;
+		} else {
+			newCode = codeGen();
+			targetRepo.create(config, newCode).catch(() => {});
+		}
+
+		const initialEvals: StudentEvaluation[] = [];
+		for (let i = 0; i < current.formPlayers; i++) {
+			const av = KID_AVATARS[i % KID_AVATARS.length];
+			initialEvals.push({
+				studentId: `c${i + 1}`,
+				studentName: `Jugador ${i + 1}`,
+				avatarId: av?.id ?? "zorro",
+				confirmed: false,
+				participacion: 0,
+				propuesta: 0,
+				organizacion: 0,
+				anecdote: "",
+				voiceTurns: 0,
+				drawsCount: 0,
+				retired: false,
+			});
+		}
+
+		const bus = createSessionSyncBus(newCode);
+
+		bus.subscribe((msg: SyncMessage) => {
+			if (msg.type === "SESSION_STATE_REQUEST") {
+				const state = get();
+				bus.send({
+					type: "SESSION_STATE_SYNC",
+					payload: {
+						code: newCode,
+						language: state.formLanguage,
+						expectedPlayers: state.formPlayers,
+						durationMinutes: state.formDurationMinutes,
+						status: state.isConfigLocked ? "playing" : "created",
+						isConfigLocked: state.isConfigLocked,
+						cards: state.studentEvals.map((s, idx) => ({
+							slotIndex: idx,
+							cardId: s.studentId,
+							playerId: s.studentId,
+							avatarId: s.avatarId,
+							studentName: s.studentName,
+							isConfirmed: s.confirmed ?? false,
+							isRetired: s.retired,
+							retiredAt: s.retiredAt,
+							turnsCount: s.voiceTurns,
+							drawsCount: s.drawsCount,
+							status: s.retired ? "retired" : "idle",
+						})),
+						countdownSeconds: state.countdownSeconds,
+					},
+				});
+			} else if (msg.type === "CARD_CONFIRMED") {
+				set((state) => {
+					const evals = [...state.studentEvals];
+					const existing = evals[msg.slotIndex];
+					if (existing) {
+						evals[msg.slotIndex] = {
+							...existing,
+							avatarId: msg.avatarId || existing.avatarId,
+							studentName: msg.studentName || existing.studentName,
+							confirmed: msg.confirmed,
+						};
+					}
+					return { studentEvals: evals };
+				});
+			} else if (msg.type === "CARD_UPDATED") {
+				set((state) => {
+					const evals = [...state.studentEvals];
+					const existing = evals[msg.slotIndex];
+					if (existing) {
+						evals[msg.slotIndex] = {
+							...existing,
+							avatarId: msg.card.avatarId ?? existing.avatarId,
+							studentName: msg.card.studentName ?? existing.studentName,
+						};
+					}
+					return { studentEvals: evals };
+				});
+			} else if (msg.type === "COUNTDOWN_START") {
+				set({
+					isConfigLocked: true,
+					isCountingDown: true,
+					countdownSeconds: msg.seconds,
+				});
+				targetRepo.updateStatus(newCode, "countdown").catch(() => {});
+			} else if (msg.type === "COUNTDOWN_CANCEL") {
+				set((state) => {
+					const evals = [...state.studentEvals];
+					const existing = evals[msg.slotIndex];
+					if (existing) {
+						evals[msg.slotIndex] = {
+							...existing,
+							confirmed: false,
+						};
+					}
+					return {
+						isCountingDown: false,
+						countdownSeconds: 0,
+						studentEvals: evals,
+					};
+				});
+			} else if (msg.type === "COUNTDOWN_TICK") {
+				set({ countdownSeconds: msg.seconds });
+			} else if (msg.type === "FORCE_START") {
+				set((state) => {
+					const confirmedEvals = state.studentEvals.filter((s) => s.confirmed);
+					return {
+						isConfigLocked: true,
+						isCountingDown: true,
+						countdownSeconds: msg.seconds,
+						studentEvals:
+							confirmedEvals.length >= 2 ? confirmedEvals : state.studentEvals,
+						formPlayers: msg.confirmedCount,
+					};
+				});
+			} else if (msg.type === "GAME_START") {
+				set({
+					isConfigLocked: true,
+					isCountingDown: false,
+					activeTab: "live",
+					liveStep: 0,
+					liveStation: "campamento",
+				});
+				targetRepo.updateStatus(newCode, "playing").catch(() => {});
+			} else if (msg.type === "RETIRE_STUDENT") {
+				set((state) => {
+					const evals = state.studentEvals.map((s, idx) =>
+						s.studentId === msg.studentId || idx === msg.slotIndex
+							? { ...s, retired: true, retiredAt: msg.retiredAt }
+							: s,
+					);
+					return { studentEvals: evals };
+				});
+			}
+		});
+
 		set({
 			activeSessionCode: newCode,
 			isConfigLocked: true,
-			activeTab: "live",
+			configError: null,
+			configShake: false,
+			syncBus: bus,
+			studentEvals: initialEvals,
 			liveStep: 0,
 			liveStation: "campamento",
-			liveTimerSeconds: get().formDurationMinutes * 60,
+			liveTimerSeconds: current.formDurationMinutes * 60,
 			teacherAssisted: false,
+			isCountingDown: false,
+			countdownSeconds: 0,
 		});
+
 		return newCode;
+	},
+
+	forceStart: async (repo?: ISessionRepository): Promise<boolean> => {
+		const targetRepo = repo ?? getDefaultSessionRepository();
+		const state = get();
+		const confirmed = state.studentEvals.filter(
+			(s) => s.confirmed && !s.retired,
+		);
+
+		if (confirmed.length < 2) {
+			throw new Error(
+				"Mínimo 2 participantes confirmados requeridos para iniciar la partida (el juego en solitario está estrictamente prohibido)",
+			);
+		}
+
+		// Broadcast FORCE_START with 3 seconds countdown
+		state.syncBus?.send({
+			type: "FORCE_START",
+			confirmedCount: confirmed.length,
+			remainingSlots: confirmed.map((_, i) => i),
+			seconds: 3,
+		});
+
+		set({
+			isConfigLocked: true,
+			isCountingDown: true,
+			countdownSeconds: 3,
+			studentEvals: confirmed,
+			formPlayers: confirmed.length,
+		});
+
+		// Lock config and update repo post-start
+		if (state.activeSessionCode) {
+			try {
+				await targetRepo.updateConfig?.(state.activeSessionCode, {
+					expectedPlayers: confirmed.length,
+				});
+				await targetRepo.updateStatus(state.activeSessionCode, "playing");
+			} catch (err) {
+				console.error("[TeacherStore] forceStart repo error:", err);
+			}
+		}
+
+		state.syncBus?.send({
+			type: "GAME_START",
+			phase: "playing",
+		});
+
+		set({
+			isCountingDown: false,
+			activeTab: "live",
+		});
+
+		return true;
 	},
 
 	setActiveTab: (tab) => set({ activeTab: tab }),
@@ -444,28 +746,74 @@ export const useTeacherStore = create<TeacherState>((set, get) => ({
 		}));
 	},
 
-	retireStudent: (studentId) => {
-		set((state) => {
-			const student = state.studentEvals.find((s) => s.studentId === studentId);
-			const studentName = student?.studentName ?? studentId;
-			const timeStr = "02:15";
-			const updatedEvals = state.studentEvals.map((s) =>
-				s.studentId === studentId
-					? { ...s, retired: true, retiredAt: timeStr }
-					: s,
-			);
-			const newEvent = {
-				id: `ev-${Date.now()}`,
-				type: "press",
-				actor: "Operador",
-				details: `Alumno ${studentName} retirado (${timeStr})`,
-				time: timeStr,
-			};
-			return {
-				studentEvals: updatedEvals,
-				recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
-			};
+	retireStudent: (studentId, repo) => {
+		const state = get();
+		const student = state.studentEvals.find((s) => s.studentId === studentId);
+		const studentName = student?.studentName ?? studentId;
+		const elapsedSeconds = Math.max(
+			0,
+			state.formDurationMinutes * 60 - state.liveTimerSeconds,
+		);
+		const mins = Math.floor(elapsedSeconds / 60);
+		const secs = elapsedSeconds % 60;
+		const timeStr = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
+		const slotIndex = state.studentEvals.findIndex(
+			(s) => s.studentId === studentId,
+		);
+
+		const updatedEvals = state.studentEvals.map((s) =>
+			s.studentId === studentId
+				? { ...s, retired: true, retiredAt: timeStr }
+				: s,
+		);
+
+		state.syncBus?.send({
+			type: "RETIRE_STUDENT",
+			studentId,
+			slotIndex: Math.max(slotIndex, 0),
+			retiredAt: timeStr,
 		});
+
+		const newEvent = {
+			id: `ev-${Date.now()}`,
+			type: "press",
+			actor: "Operador",
+			details: `Alumno ${studentName} retirado (${timeStr})`,
+			time: timeStr,
+		};
+
+		set({
+			studentEvals: updatedEvals,
+			recentEvents: [newEvent, ...state.recentEvents].slice(0, 20),
+		});
+
+		const targetRepo =
+			repo ??
+			(state.activeSessionCode ? getDefaultSessionRepository() : undefined);
+		if (state.activeSessionCode && targetRepo) {
+			const activeCode = state.activeSessionCode;
+			targetRepo
+				.getByCode(activeCode)
+				.then((record) => {
+					if (record) {
+						const existingPlayer = record.players.find(
+							(p) => p.playerId === studentId || p.slotIndex === slotIndex,
+						);
+						if (existingPlayer) {
+							const updatedPlayer: PlayerCard = {
+								...existingPlayer,
+								retired: true,
+								retiredGameTsMs: elapsedSeconds * 1000,
+							};
+							targetRepo
+								.updatePlayer?.(activeCode, updatedPlayer)
+								.catch(() => {});
+						}
+					}
+				})
+				.catch(() => {});
+		}
 	},
 
 	retryService: () => {

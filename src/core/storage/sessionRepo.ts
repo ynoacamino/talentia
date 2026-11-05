@@ -10,7 +10,7 @@ import {
 	type DrawSubmission,
 	type EventLogEntry,
 	type IEventLogPort,
-	type ISessionRepository,
+	type ISyncSessionRepository,
 	isValidCode,
 	type JudgeScores,
 	type PlayerCard,
@@ -23,7 +23,7 @@ import {
 	type TranscriptTurn,
 } from "@/shared/documents.ts";
 
-export class InMemorySessionRepository implements ISessionRepository {
+export class InMemorySessionRepository implements ISyncSessionRepository {
 	private readonly sessions = new Map<string, SessionRecord>();
 	private readonly sessionsById = new Map<string, string>(); // sessionId -> code
 	private eventLog?: IEventLogPort;
@@ -57,13 +57,35 @@ export class InMemorySessionRepository implements ISessionRepository {
 	}
 
 	/**
-	 * Creates a new session record.
+	 * Synchronously creates a new session record.
 	 * Generates a 4-character code without confusables (0, O, 1, I, L) unless initialCode is provided.
 	 */
-	async create(
-		config: SessionConfig,
-		initialCode?: string,
-	): Promise<SessionRecord> {
+	createSync(config: SessionConfig, initialCode?: string): SessionRecord {
+		if (!["ES", "EN", "QUZ"].includes(config.language)) {
+			throw new Error(
+				`Invalid language "${config.language}": must be ES, EN, or QUZ`,
+			);
+		}
+		if (
+			!Number.isInteger(config.expectedPlayers) ||
+			config.expectedPlayers < 3 ||
+			config.expectedPlayers > 6
+		) {
+			throw new Error(
+				`Invalid expectedPlayers ${config.expectedPlayers}: must be an integer between 3 and 6`,
+			);
+		}
+		if (
+			!Number.isInteger(config.durationMinutes) ||
+			config.durationMinutes < 5 ||
+			config.durationMinutes > 40 ||
+			config.durationMinutes % 5 !== 0
+		) {
+			throw new Error(
+				`Invalid durationMinutes ${config.durationMinutes}: must be between 5 and 40 in steps of 5`,
+			);
+		}
+
 		let finalCode: string;
 
 		if (initialCode !== undefined) {
@@ -150,6 +172,17 @@ export class InMemorySessionRepository implements ISessionRepository {
 	}
 
 	/**
+	 * Creates a new session record.
+	 * Generates a 4-character code without confusables (0, O, 1, I, L) unless initialCode is provided.
+	 */
+	async create(
+		config: SessionConfig,
+		initialCode?: string,
+	): Promise<SessionRecord> {
+		return this.createSync(config, initialCode);
+	}
+
+	/**
 	 * Retrieves a session record by its 4-character code or sessionId.
 	 * Returns null if not found.
 	 */
@@ -163,9 +196,9 @@ export class InMemorySessionRepository implements ISessionRepository {
 	}
 
 	/**
-	 * Lists summaries of all stored sessions, sorted chronologically descending.
+	 * Lists summaries of all stored sessions, sorted chronologically descending (synchronous helper).
 	 */
-	async listPast(): Promise<SessionSummary[]> {
+	listPastSync(): SessionSummary[] {
 		const summaries: SessionSummary[] = [];
 
 		for (const record of this.sessions.values()) {
@@ -193,7 +226,27 @@ export class InMemorySessionRepository implements ISessionRepository {
 	}
 
 	/**
+	 * Synchronous lookup helper for SSR / synchronous testing.
+	 */
+	getByCodeSync(code: string): SessionRecord | null {
+		const canonicalCode = this.resolveCode(code);
+		const found = this.sessions.get(canonicalCode);
+		if (!found) {
+			return null;
+		}
+		return this.cloneRecord(found);
+	}
+
+	/**
+	 * Lists summaries of all stored sessions, sorted chronologically descending.
+	 */
+	async listPast(): Promise<SessionSummary[]> {
+		return this.listPastSync();
+	}
+
+	/**
 	 * Updates the status of an existing session.
+	 * Automatically locks configuration if transitioning post-start (countdown, intro, playing).
 	 */
 	async updateStatus(code: string, status: SessionStatus): Promise<void> {
 		const canonicalCode = this.resolveCode(code);
@@ -202,13 +255,121 @@ export class InMemorySessionRepository implements ISessionRepository {
 			throw new Error(`Session with code "${code}" not found`);
 		}
 
+		const isPostStart =
+			status === "countdown" || status === "intro" || status === "playing";
+		const locked = isPostStart ? true : record.config.locked;
+
 		const updated: SessionRecord = {
 			...record,
 			status,
+			config: {
+				...record.config,
+				locked,
+			},
 			updatedAtWallMs: Date.now(),
 		};
 
 		this.sessions.set(canonicalCode, updated);
+	}
+
+	/**
+	 * Updates session configuration before start.
+	 * Throws Error if configuration is locked post-start.
+	 */
+	async updateConfig(
+		code: string,
+		newConfig: Partial<SessionConfig>,
+	): Promise<void> {
+		const canonicalCode = this.resolveCode(code);
+		const record = this.sessions.get(canonicalCode);
+		if (!record) {
+			throw new Error(`Session with code "${code}" not found`);
+		}
+
+		if (record.config.locked) {
+			throw new Error(
+				"Configuration is locked: cannot mutate session configuration post-start",
+			);
+		}
+
+		if (
+			newConfig.language !== undefined &&
+			!["ES", "EN", "QUZ"].includes(newConfig.language)
+		) {
+			throw new Error(
+				`Invalid language "${newConfig.language}": must be ES, EN, or QUZ`,
+			);
+		}
+		if (
+			newConfig.expectedPlayers !== undefined &&
+			(!Number.isInteger(newConfig.expectedPlayers) ||
+				newConfig.expectedPlayers < 2 ||
+				newConfig.expectedPlayers > 6)
+		) {
+			throw new Error(
+				`Invalid expectedPlayers ${newConfig.expectedPlayers}: must be an integer between 2 and 6`,
+			);
+		}
+		if (
+			newConfig.durationMinutes !== undefined &&
+			(!Number.isInteger(newConfig.durationMinutes) ||
+				newConfig.durationMinutes < 5 ||
+				newConfig.durationMinutes > 40 ||
+				newConfig.durationMinutes % 5 !== 0)
+		) {
+			throw new Error(
+				`Invalid durationMinutes ${newConfig.durationMinutes}: must be between 5 and 40 in steps of 5`,
+			);
+		}
+
+		const updatedConfig: SessionConfig = {
+			...record.config,
+			...newConfig,
+			durationGameMs:
+				newConfig.durationMinutes !== undefined
+					? newConfig.durationMinutes * 60 * 1000
+					: record.config.durationGameMs,
+		};
+
+		const updated: SessionRecord = {
+			...record,
+			config: updatedConfig,
+			gameTimeRemainingMs: updatedConfig.durationGameMs,
+			updatedAtWallMs: Date.now(),
+		};
+
+		this.sessions.set(canonicalCode, updated);
+	}
+
+	/**
+	 * Updates a player card in the session (e.g. marking as retired).
+	 */
+	async updatePlayer(code: string, player: PlayerCard): Promise<void> {
+		const canonicalCode = this.resolveCode(code);
+		const record = this.sessions.get(canonicalCode);
+		if (!record) {
+			throw new Error(`Session with code "${code}" not found`);
+		}
+
+		const pIdx = record.players.findIndex(
+			(p) =>
+				p.playerId === player.playerId ||
+				(player.slotIndex !== undefined && p.slotIndex === player.slotIndex),
+		);
+
+		if (pIdx >= 0) {
+			const updatedPlayers = [...record.players];
+			const existing = updatedPlayers[pIdx];
+			if (existing) {
+				updatedPlayers[pIdx] = { ...existing, ...player };
+			}
+			const updated: SessionRecord = {
+				...record,
+				players: updatedPlayers,
+				updatedAtWallMs: Date.now(),
+			};
+			this.sessions.set(canonicalCode, updated);
+		}
 	}
 
 	/**

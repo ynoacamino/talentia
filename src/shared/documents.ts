@@ -477,6 +477,8 @@ export interface ISessionRepository {
 	getByCode(code: string): Promise<SessionRecord | null>;
 	listPast(): Promise<SessionSummary[]>;
 	updateStatus(code: string, status: SessionStatus): Promise<void>;
+	updateConfig?(code: string, newConfig: Partial<SessionConfig>): Promise<void>;
+	updatePlayer?(code: string, player: PlayerCard): Promise<void>;
 	addComment(code: string, text: string): Promise<SessionComment>;
 	saveScores(code: string, scores: JudgeScores): Promise<void>;
 	/**
@@ -484,6 +486,12 @@ export interface ISessionRepository {
 	 * Elimina sesión, eventos, dibujos, transcripciones, puntajes y comentarios (Ley 29733).
 	 */
 	hardDelete(code: string): Promise<boolean>;
+}
+
+export interface ISyncSessionRepository extends ISessionRepository {
+	createSync?(config: SessionConfig, initialCode?: string): SessionRecord;
+	getByCodeSync?(code: string): SessionRecord | null;
+	listPastSync?(): SessionSummary[];
 }
 
 export interface IEventLogPort {
